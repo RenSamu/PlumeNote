@@ -1,0 +1,42 @@
+name: Construire l'APK Android
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_B64: ${{ secrets.PLUME_KEYSTORE_B64 }}
+      PLUME_KEYSTORE_PASSWORD: ${{ secrets.PLUME_KEYSTORE_PASSWORD }}
+      PLUME_KEY_ALIAS: ${{ secrets.PLUME_KEY_ALIAS }}
+      PLUME_KEY_PASSWORD: ${{ secrets.PLUME_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: android-actions/setup-android@v3
+      - run: npm install
+      - name: Clé de signature (si fournie)
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$GITHUB_WORKSPACE/plume.jks"
+            echo "PLUME_KEYSTORE=$GITHUB_WORKSPACE/plume.jks" >> "$GITHUB_ENV"
+          fi
+      - name: Préparer le projet Android
+        run: node scripts/prepare-android.mjs
+        env:
+          PLUME_VERSION_CODE: ${{ github.run_number }}
+      - name: Compiler l'APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          if [ -n "$PLUME_KEYSTORE" ]; then ./gradlew assembleRelease; else ./gradlew assembleDebug; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plume-apk
+          path: android/app/build/outputs/apk/**/*.apk

@@ -1,0 +1,12 @@
+{
+  "appId": "app.plume.notes",
+  "appName": "Plume",
+  "webDir": "www",
+  "backgroundColor": "#141311",
+  "android": { "backgroundColor": "#141311", "allowMixedContent": false },
+  "plugins": {
+    "SplashScreen": { "launchShowDuration": 0 },
+    "Keyboard": { "resize": "native", "resizeOnFullScreen": true },
+    "LocalNotifications": { "smallIcon": "ic_stat_plume", "iconColor": "#F2A33A" }
+  }
+}

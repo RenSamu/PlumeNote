@@ -1,0 +1,23 @@
+name: Publier la version web (PWA)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['src/**', 'build.mjs', 'assets/**', 'package.json']
+
+permissions: { contents: read, pages: write, id-token: write }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: '${{ steps.d.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm install && node build.mjs
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: www }
+      - id: d
+        uses: actions/deploy-pages@v4
