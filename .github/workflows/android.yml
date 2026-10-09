@@ -19,7 +19,7 @@ jobs:
         with: { node-version: 22 }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
-      - name: SDK Android (préinstallé sur le runner) : licences et plateforme
+      - name: Licences et plateforme du SDK Android
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
