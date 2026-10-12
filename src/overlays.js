@@ -1,11 +1,12 @@
 // Calques : sélecteur d'échéance, palette de commandes, réglages.
-import { h, openLayer, openSheet, toast } from './ui.js';
+import { h, openLayer, openSheet, toast, confirmDialog } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
 import { state, searchAll, liveNotes, setSetting, storageStats, exportAll, importAll } from './store.js';
 import { saveBlob, pickFiles } from './files.js';
 import { permissionState, requestPermission, reschedule } from './reminders.js';
-import { ymd, addDays, startOfDay, dueToken, humanSize, weekdayName, longDay } from './md.js';
+import { requestCode, verifyCode, signOut, syncNow, onStatus, status as syncStatus } from './sync.js';
+import { ymd, relTime, addDays, startOfDay, dueToken, humanSize, weekdayName, longDay } from './md.js';
 
 const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : 'dev';
 
@@ -167,9 +168,7 @@ export function openSettings() {
             } }, h('span', { html: icon('upload', 17) }), 'Importer'))),
         h('section', {},
           h('h3', {}, 'Synchronisation'),
-          h('div', { class: 'sync-card' }, h('span', { html: icon('cloud', 20) }),
-            h('div', {}, h('div', { class: 'set-label' }, 'Pas encore activée'),
-              h('div', { class: 'set-desc' }, 'Vos notes restent sur cet appareil. Exportez une sauvegarde pour les mettre à l\'abri en attendant la synchronisation.')))),
+          syncPanel()),
         h('section', {},
           h('h3', {}, 'Raccourcis'),
           h('dl', { class: 'keys' },
@@ -177,4 +176,71 @@ export function openSettings() {
         h('p', { class: 'about' }, `Plume ${VERSION} · fait pour aller vite`));
     },
   });
+}
+
+// ——— Synchronisation ———
+function syncPanel() {
+  const box = h('div', { class: 'sync-panel' });
+  let step = 'email'; // email → code
+  let email = '';
+  let busy = false;
+  let msg = '';
+
+  const run = async (fn) => {
+    if (busy) return;
+    busy = true; msg = ''; render();
+    try { await fn(); } catch (e) { msg = e.message || String(e); }
+    busy = false; render();
+  };
+
+  function render() {
+    const st = syncStatus;
+    if (st.state === 'off' || st.state === 'expired') {
+      const emailInput = h('input', { class: 'field', id: 'sync-email', type: 'email', inputmode: 'email', autocomplete: 'email', placeholder: 'vous@exemple.ch', value: email, 'aria-label': 'Adresse e-mail', disabled: busy || step === 'code' });
+      const codeInput = h('input', { class: 'field', id: 'sync-code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '10', placeholder: 'Code reçu par e-mail', 'aria-label': 'Code à usage unique', disabled: busy });
+      const sendCode = () => run(async () => {
+        email = emailInput.value.trim();
+        if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Adresse e-mail invalide.');
+        await requestCode(email); step = 'code';
+      });
+      const confirmCode = () => run(async () => {
+        const c = codeInput.value.replace(/\s/g, '');
+        if (c.length < 6) throw new Error('Saisissez le code reçu par e-mail.');
+        await verifyCode(email, c); step = 'email'; toast('Synchronisation activée');
+      });
+      emailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCode(); } });
+      codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmCode(); } });
+      box.replaceChildren(
+        h('p', { class: 'set-desc flat' }, st.state === 'expired' ? 'Votre session a expiré. Recevez un nouveau code pour reprendre la synchronisation.' : 'Retrouvez vos notes sur tous vos appareils. Un code à usage unique est envoyé par e-mail, sans mot de passe.'),
+        step === 'email'
+          ? h('div', { class: 'sync-form' }, emailInput, h('button', { class: 'btn btn-primary', type: 'button', disabled: busy, onclick: sendCode }, busy ? 'Envoi…' : 'Recevoir le code'))
+          : h('div', { class: 'sync-form' },
+              h('p', { class: 'set-desc flat' }, `Code envoyé à ${email}. Il peut mettre une minute à arriver.`),
+              codeInput,
+              h('div', { class: 'set-actions' },
+                h('button', { class: 'btn btn-primary', type: 'button', disabled: busy, onclick: confirmCode }, busy ? 'Vérification…' : 'Valider'),
+                h('button', { class: 'btn', type: 'button', disabled: busy, onclick: () => { step = 'email'; msg = ''; render(); } }, 'Changer d’adresse'))),
+        msg ? h('p', { class: 'sync-msg err', role: 'alert' }, msg) : null);
+      if (step === 'code') setTimeout(() => codeInput.focus(), 30);
+      return;
+    }
+    const line = st.state === 'syncing' ? 'Synchronisation…'
+      : st.state === 'error' ? st.error
+      : st.last ? `Synchronisé ${relTime(st.last).toLowerCase()}` : 'En attente de synchronisation';
+    box.replaceChildren(
+      h('div', { class: 'sync-card on' }, h('span', { html: icon('cloud', 20) }),
+        h('div', {}, h('div', { class: 'set-label' }, st.email || 'Connecté'),
+          h('div', { class: 'set-desc' + (st.state === 'error' ? ' err' : '') }, line))),
+      h('div', { class: 'set-actions' },
+        h('button', { class: 'btn', type: 'button', disabled: st.state === 'syncing', onclick: () => syncNow() }, 'Synchroniser maintenant'),
+        h('button', { class: 'btn', type: 'button', onclick: async () => {
+          const ok = await confirmDialog({ title: 'Se déconnecter ?', message: 'Les notes restent sur cet appareil et sur votre compte. Elles ne seront simplement plus synchronisées ici.', confirm: 'Se déconnecter' });
+          if (ok) { await signOut(); step = 'email'; email = ''; toast('Déconnecté'); }
+        } }, 'Se déconnecter')));
+  }
+
+  const off = onStatus(() => { if (!box.isConnected && box.dataset.mounted) { off(); return; } render(); });
+  render();
+  setTimeout(() => { box.dataset.mounted = '1'; }, 0);
+  return box;
 }

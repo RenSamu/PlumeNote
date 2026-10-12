@@ -30,3 +30,9 @@ partage de texte vers Plume. Liens : `plume://new`, `plume://today`, `plume://ta
 
 ## Suite prévue
 Synchronisation Supabase (`supabase/schema.sql`), connexion par lien magique.
+
+## Synchronisation (Supabase)
+1. Exécuter `supabase/schema.sql` dans le SQL Editor (réexécutable sans risque).
+2. Authentication → Emails : le modèle « Magic Link » doit contenir `{{ .Token }}`.
+3. Réglages de Plume → Synchronisation → recevoir le code par e-mail.
+Les clés publiques du projet sont dans `src/config.js`.

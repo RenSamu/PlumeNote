@@ -41,8 +41,8 @@ function derive(n) {
 }
 
 function serialize(n) {
-  const { id, body, title, snippet, tags, folderId, pinned, kind, date, createdAt, updatedAt, deletedAt } = n;
-  return { id, body, title, snippet, tags, folderId, pinned, kind, date, createdAt, updatedAt, deletedAt };
+  const { id, body, title, snippet, tags, folderId, pinned, kind, date, createdAt, updatedAt, deletedAt, rv } = n;
+  return { id, body, title, snippet, tags, folderId, pinned, kind, date, createdAt, updatedAt, deletedAt, rv };
 }
 
 // ——— Initialisation ———
@@ -55,7 +55,7 @@ export async function init() {
   if (!state.deviceId) { state.deviceId = uid(); await db.put('meta', { key: 'deviceId', value: state.deviceId }); }
   state.settings = { ...DEFAULT_SETTINGS, ...(metaMap.get('settings') || {}) };
 
-  folders.forEach((f) => state.folders.set(f.id, f));
+  folders.forEach((f) => { if (!f.deletedAt) state.folders.set(f.id, f); });
   atts.forEach((a) => state.atts.set(a.id, a));
 
   const limit = Date.now() - TRASH_DAYS * 86400000;
@@ -70,8 +70,19 @@ export async function init() {
   emit({ type: 'ready' });
 }
 
-async function purgeIds(ids) {
+let syncEnabled = false;
+export function setSyncEnabled(v) { syncEnabled = !!v; }
+
+async function addPurged(entries) {
+  if (!entries.length) return;
+  const cur = (await db.get('meta', 'purged'))?.value || [];
+  await db.put('meta', { key: 'purged', value: cur.concat(entries) });
+}
+
+async function purgeIds(ids, { record = true } = {}) {
   const attIds = [...state.atts.values()].filter((a) => ids.includes(a.noteId)).map((a) => a.id);
+  if (record && syncEnabled) await addPurged([...ids.map((id) => ({ t: 'notes', id })), ...attIds.map((id) => ({ t: 'attachments', id }))]);
+  for (const id of ids) { clearTimeout(timers.get(id)); timers.delete(id); }
   await db.delMany('notes', ids);
   if (attIds.length) { await db.deleteAttachments(attIds); attIds.forEach((i) => { state.atts.delete(i); revoke(i); }); }
   ids.forEach((i) => state.notes.delete(i));
@@ -103,9 +114,9 @@ export function flush() {
 
 export function getNote(id) { return state.notes.get(id) || state.drafts.get(id) || null; }
 
-export function createDraft({ folderId = null, body = '', kind = 'note', date = null } = {}) {
+export function createDraft({ folderId = null, body = '', kind = 'note', date = null, id = null } = {}) {
   const now = Date.now();
-  const n = { id: uid(), body, folderId, pinned: false, kind, date, createdAt: now, updatedAt: now, deletedAt: null };
+  const n = { id: id || uid(), body, folderId, pinned: false, kind, date, createdAt: now, updatedAt: now, deletedAt: null };
   derive(n);
   state.drafts.set(n.id, n);
   return n;
@@ -190,8 +201,9 @@ export function renameFolder(id, name) {
 export function deleteFolder(id) {
   const f = state.folders.get(id); if (!f) return;
   for (const n of state.notes.values()) if (n.folderId === id) touch(n, { folderId: null });
+  f.deletedAt = Date.now(); f.updatedAt = f.deletedAt;
   state.folders.delete(id);
-  db.del('folders', id);
+  db.put('folders', f);
   emit({ type: 'folders' }); emit({ type: 'notes' });
 }
 export const foldersList = () => [...state.folders.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
@@ -329,12 +341,12 @@ export async function exportAll() {
   const attachments = [];
   for (const a of state.atts.values()) {
     const blob = await db.getBlob(a.id);
-    if (blob) attachments.push({ ...a, data: await toB64(blob) });
+    if (blob) { const { rv, up, ...meta } = a; attachments.push({ ...meta, data: await toB64(blob) }); }
   }
   const payload = {
     app: 'plume', version: 1, exportedAt: new Date().toISOString(), deviceId: state.deviceId,
-    notes: [...state.notes.values()].map(serialize),
-    folders: [...state.folders.values()],
+    notes: [...state.notes.values()].map(serialize).map(({ rv, ...x }) => x),
+    folders: [...state.folders.values()].map(({ rv, ...x }) => x),
     attachments,
   };
   return new Blob([JSON.stringify(payload)], { type: 'application/json' });
@@ -344,18 +356,108 @@ export async function importAll(text) {
   const data = JSON.parse(text);
   if (data.app !== 'plume') throw new Error("Ce fichier n'est pas une sauvegarde Plume.");
   let added = 0;
-  for (const f of data.folders || []) if (!state.folders.has(f.id)) { state.folders.set(f.id, f); await db.put('folders', f); }
+  for (const f of data.folders || []) if (!state.folders.has(f.id)) { delete f.rv; state.folders.set(f.id, f); await db.put('folders', f); }
   for (const n of data.notes || []) {
     const cur = state.notes.get(n.id);
     if (cur && cur.updatedAt >= n.updatedAt) continue;
-    derive(n); state.notes.set(n.id, n); await db.put('notes', serialize(n)); added++;
+    delete n.rv; derive(n); state.notes.set(n.id, n); await db.put('notes', serialize(n)); added++;
   }
   for (const a of data.attachments || []) {
     if (state.atts.has(a.id)) continue;
-    const { data: b64, ...meta } = a;
+    const { data: b64, rv, up, ...meta } = a;
     await db.putAttachment(meta, fromB64(b64, meta.type));
     state.atts.set(meta.id, meta);
   }
   emit({ type: 'notes' }); emit({ type: 'folders' });
   return added;
+}
+
+// ——— Synchronisation (utilisé par sync.js) ———
+// rv = updatedAt de la version connue du serveur. Un enregistrement est « à envoyer » tant que rv !== updatedAt.
+
+export async function collectChanges() {
+  flush();
+  const notes = [...state.notes.values()].filter((n) => n.rv !== n.updatedAt).map(serialize);
+  const folders = (await db.getAll('folders')).filter((f) => f.rv !== f.updatedAt);
+  const atts = [...state.atts.values()].filter((a) => a.rv !== a.updatedAt || (!a.up && !a.deletedAt)).map((a) => ({ ...a }));
+  const purged = (await db.get('meta', 'purged'))?.value || [];
+  return { notes, folders, atts, purged };
+}
+
+export async function markPushed({ notes = [], folders = [], atts = [], purgedCount = 0 }) {
+  for (const { id, u } of notes) {
+    const n = state.notes.get(id); if (!n) continue;
+    n.rv = u; await db.put('notes', serialize(n));
+  }
+  for (const { id, u } of folders) {
+    const f = state.folders.get(id) || await db.get('folders', id); if (!f) continue;
+    f.rv = u; await db.put('folders', f);
+  }
+  for (const { id, u } of atts) {
+    const a = state.atts.get(id); if (!a) continue;
+    a.rv = u; a.up = true; await db.put('attachments', a);
+  }
+  if (purgedCount) {
+    const cur = (await db.get('meta', 'purged'))?.value || [];
+    await db.put('meta', { key: 'purged', value: cur.slice(purgedCount) });
+  }
+}
+
+/** Applique des lignes distantes déjà converties au format local (avec rv = updatedAt distant). */
+export async function applyRemote({ notes = [], folders = [] }) {
+  const changed = [];
+  let foldersChanged = false;
+  for (const r of folders) {
+    const cur = state.folders.get(r.id) || await db.get('folders', r.id);
+    if (cur && cur.updatedAt >= r.updatedAt) {
+      if (cur.updatedAt === r.updatedAt && cur.rv !== r.updatedAt) { cur.rv = r.updatedAt; await db.put('folders', cur); }
+      continue;
+    }
+    const f = { id: r.id, name: r.name || 'Sans titre', createdAt: r.createdAt || r.updatedAt, updatedAt: r.updatedAt, deletedAt: r.deletedAt ?? null, rv: r.updatedAt };
+    if (f.deletedAt || r.purged) state.folders.delete(f.id); else state.folders.set(f.id, f);
+    await db.put('folders', f);
+    foldersChanged = true;
+  }
+  for (const r of notes) {
+    const cur = state.notes.get(r.id);
+    if (cur && cur.updatedAt >= r.updatedAt) {
+      if (cur.updatedAt === r.updatedAt && cur.rv !== r.updatedAt) { cur.rv = r.updatedAt; await db.put('notes', serialize(cur)); }
+      continue;
+    }
+    clearTimeout(timers.get(r.id)); timers.delete(r.id);
+    if (r.purged) { if (cur) await purgeIds([r.id], { record: false }); changed.push(r.id); continue; }
+    const n = {
+      id: r.id, body: r.body ?? '', folderId: r.folderId ?? null, pinned: !!r.pinned, kind: r.kind || 'note', date: r.date ?? null,
+      createdAt: r.createdAt || r.updatedAt, updatedAt: r.updatedAt, deletedAt: r.deletedAt ?? null, rv: r.updatedAt,
+    };
+    // Même objet qu'avant : le volet de note garde sa référence et se met à jour.
+    const target = cur ? Object.assign(cur, n) : n;
+    derive(target);
+    state.drafts.delete(target.id);
+    state.notes.set(target.id, target);
+    await db.put('notes', serialize(target));
+    changed.push(target.id);
+  }
+  if (changed.length) { emit({ type: 'notes', source: 'sync' }); changed.forEach((id) => emit({ type: 'body', id, source: 'sync' })); }
+  if (foldersChanged) emit({ type: 'folders', source: 'sync' });
+  return changed.length + (foldersChanged ? 1 : 0);
+}
+
+export async function putRemoteAttachment(meta, blob) {
+  await db.putAttachment(meta, blob);
+  state.atts.set(meta.id, meta);
+}
+
+export async function removeLocalAttachments(ids) {
+  const have = ids.filter((i) => state.atts.has(i));
+  if (!have.length) return;
+  await db.deleteAttachments(have);
+  have.forEach((i) => { state.atts.delete(i); revoke(i); });
+}
+
+export async function resetSyncState() {
+  for (const n of state.notes.values()) { delete n.rv; await db.put('notes', serialize(n)); }
+  for (const f of await db.getAll('folders')) { delete f.rv; await db.put('folders', f); }
+  for (const a of state.atts.values()) { delete a.rv; delete a.up; await db.put('attachments', a); }
+  await db.put('meta', { key: 'purged', value: [] });
 }

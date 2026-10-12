@@ -13,6 +13,8 @@ import { createNotePane } from './notepane.js';
 import { openPalette, openSettings } from './overlays.js';
 import { setHandlers, reschedule } from './reminders.js';
 import { ymd, parseYmd, normalizeDates } from './md.js';
+import { startSync } from './sync.js';
+import * as storeAll from './store.js';
 
 const native = Capacitor.isNativePlatform();
 
@@ -207,7 +209,7 @@ async function boot() {
   // ——— Premier lancement et capture instantanée ———
   let first = false;
   if (!state.settings.welcomed && state.notes.size === 0) {
-    const n = createDraft();
+    const n = createDraft({ id: 'welcome-note' }); // id fixe : un seul exemplaire une fois synchronisé
     setBody(n.id, normalizeDates(WELCOME), 'init');
     togglePin(n.id);
     setSetting('welcomed', true);
@@ -228,6 +230,8 @@ async function boot() {
     applyRoute();
   }
   reschedule();
+  if (window.__PLUME_TEST__) window.__plumeStore = storeAll;
+  startSync().catch((e) => console.warn('sync', e));
 
   if ('serviceWorker' in navigator && !native && location.protocol.startsWith('http') && !window.__PLUME_SINGLE__) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

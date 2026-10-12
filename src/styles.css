@@ -445,3 +445,11 @@ kbd { font: 500 11px/1 var(--ui); color: var(--muted); background: var(--surface
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Synchronisation */
+.sync-panel { display: flex; flex-direction: column; gap: 12px; }
+.sync-form { display: flex; flex-direction: column; gap: 10px; }
+.sync-card.on { border-style: solid; color: var(--text); }
+.sync-card.on svg { color: var(--amber); }
+.sync-msg.err, .set-desc.err { color: var(--danger); }
+.sync-msg { font-size: 13px; margin: 0; }
