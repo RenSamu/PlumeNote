@@ -178,24 +178,59 @@ function resolveToken(tok, now) {
   return null;
 }
 
+// Date écrite en clair, avec une heure obligatoire : « demain 14h », « le mardi à 9h30 », « 15/10 14:00 ».
+// Réservée aux lignes de tâche sans échéance, pour ne pas toucher au texte courant.
+const NAT_RE = new RegExp(
+  "(^|\\s)(?:le\\s+)?(apr[eè]s-?demain|demain|aujourd['’]?hui|dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi|\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)" +
+    "\\s+(?:[àa]\\s+)?(\\d{1,2})(?:h(\\d{2})?|:(\\d{2}))(?=\\s|$|[.,;:!?)])",
+  'giu'
+);
+
+/** Vrai si la ligne peut contenir une date à normaliser (test rapide avant le travail réel). */
+export const maybeDated = (line) => line.includes('@') || /\d\s*h|\d:\d/i.test(line);
+
 /** Remplace @demain 14h, @lun, @+3j, @12/10… par @AAAA-MM-JJ [HH:MM] sur les lignes de tâche. */
 export function normalizeDates(text, now = new Date()) {
   let changed = false;
   const lines = text.split('\n').map((line) => {
-    if (!TASK_RE.test(line) || !line.includes('@')) return line;
-    return line.replace(NORM_RE, (all, pre, tok, hh, mm) => {
-      const d = resolveToken(tok, now);
-      if (!d) return all;
-      changed = true;
-      let out = `${pre}@${ymd(d)}`;
-      if (hh !== undefined) {
-        const h = Math.min(23, +hh);
-        out += ` ${pad(h)}:${pad(Math.min(59, +(mm || 0)))}`;
-      }
-      return out;
-    });
+    if (!TASK_RE.test(line)) return line;
+    let out = line;
+    if (out.includes('@')) {
+      out = out.replace(NORM_RE, (all, pre, tok, hh, mm) => {
+        const d = resolveToken(tok, now);
+        if (!d) return all;
+        let r = `${pre}@${ymd(d)}`;
+        if (hh !== undefined) {
+          const h = Math.min(23, +hh);
+          r += ` ${pad(h)}:${pad(Math.min(59, +(mm || 0)))}`;
+        }
+        return r;
+      });
+    }
+    if (!DUE_RE.test(out) && /\d\s*h|\d:\d/i.test(out)) {
+      out = out.replace(NAT_RE, (all, pre, tok, hh, mmH, mmC) => {
+        const d = resolveToken(tok, now);
+        if (!d || +hh > 23) return all;
+        return `${pre}@${ymd(d)} ${pad(+hh)}:${pad(Math.min(59, +(mmH || mmC || 0)))}`;
+      });
+    }
+    if (out !== line) changed = true;
+    return out;
   });
   return changed ? lines.join('\n') : text;
+}
+
+// ——— Calendrier du téléphone ———
+
+/** Repère ajouté en fin de ligne une fois l'événement créé : évite d'en proposer un second. */
+export const CAL_MARK = '📅';
+export const hasCalMark = (s) => s.includes(CAL_MARK);
+
+/** Tâches ouvertes datées ET horodatées qui n'ont pas encore d'événement. */
+export function calendarCandidates(body) {
+  return parseTasks(body)
+    .filter((t) => !t.done && t.due && t.due.time && !hasCalMark(t.raw))
+    .map((t) => ({ line: t.line, title: t.text, date: t.due.date, time: t.due.time }));
 }
 
 export function dueToken(dateStr, timeStr) {

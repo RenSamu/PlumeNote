@@ -72,6 +72,18 @@ if (!xml.includes(MARK)) {
   fs.writeFileSync(mf, xml);
 }
 
+// Calendrier du téléphone : lecture des rendez-vous, création d'événements (bloc de permissions séparé,
+// pour qu'un projet Android déjà préparé reçoive aussi ces autorisations).
+{
+  let t = fs.readFileSync(mf, 'utf8');
+  if (!t.includes('android.permission.READ_CALENDAR')) {
+    t = t.replace(/(<\/manifest>)/, `    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+$1`);
+    fs.writeFileSync(mf, t);
+  }
+}
+
 // Raccourcis d'icône (appui long) — mêmes liens plume://
 fs.writeFileSync(path.join(main, 'res/xml/shortcuts.xml'), `<?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">

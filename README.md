@@ -28,8 +28,13 @@ Dates dans une tâche : `@demain 14h`, `@lun`, `@+3j`, `@12/10`.
 Widget d'accueil, tuile « Nouvelle note » dans les réglages rapides, raccourcis d'icône (appui long),
 partage de texte vers Plume. Liens : `plume://new`, `plume://today`, `plume://tasks`.
 
-## Suite prévue
-Synchronisation Supabase (`supabase/schema.sql`), connexion par lien magique.
+## Agenda et calendrier du téléphone (APK)
+- La note du jour affiche un bloc **Agenda** : rendez-vous du jour, tâches en retard ou du jour (des autres notes), aperçu des 7 prochains jours. Il se replie d'un appui.
+- Premier affichage : Plume demande l'accès au calendrier. Sans accès, seules les tâches sont affichées. Plume ne modifie jamais un événement existant.
+- Une tâche avec date **et heure** (`- [ ] RDV dentiste demain 14h`) est reconnue à la fin de la ligne : Plume propose « Ajouter au calendrier ». L'événement dure 1 h ; la ligne reçoit un 📅 pour ne pas être proposée deux fois.
+- Dates en clair reconnues sur une ligne de tâche, à condition d'avoir une heure : `demain 14h`, `mardi 9h30`, `le 20/12 à 14:00`, `15/10 18:00`.
+- Sur le web, il n'y a pas de calendrier local : le bloc montre les tâches et indique que les rendez-vous sont disponibles dans l'application Android.
+- Permissions ajoutées par `scripts/prepare-android.mjs` : `READ_CALENDAR`, `WRITE_CALENDAR`. Plugin : `@ebarooni/capacitor-calendar`.
 
 ## Synchronisation (Supabase)
 1. Exécuter `supabase/schema.sql` dans le SQL Editor (réexécutable sans risque).

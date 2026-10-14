@@ -5,7 +5,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language';
 import { icon } from './icons.js';
-import { normalizeDates, parseTasks, dueState, fmtDuration, humanSize } from './md.js';
+import { normalizeDates, maybeDated, parseTasks, dueState, fmtDuration, humanSize } from './md.js';
 
 // Points d'accès fournis par l'application (pièces jointes, aperçu image…)
 export const hooks = {
@@ -449,7 +449,7 @@ export function normalizeLine(view) {
   const changes = [];
   for (let i = 1; i <= doc.lines; i++) {
     const l = doc.line(i);
-    if (!l.text.includes('@')) continue;
+    if (!maybeDated(l.text)) continue;
     const n = normalizeDates(l.text);
     if (n !== l.text) changes.push({ from: l.from, to: l.to, insert: n });
   }
@@ -531,6 +531,8 @@ export function createEditor(parent, { onChange = () => {}, onFiles = () => {}, 
       view.dispatch({ selection: { anchor: l.to }, effects: EditorView.scrollIntoView(l.to, { y: 'center' }) });
     },
     get focused() { return view.hasFocus; },
+    /** Index (à partir de 0) de la ligne où se trouve le curseur, ou -1 si l'éditeur n'a pas le focus. */
+    cursorLine() { return view.hasFocus ? view.state.doc.lineAt(view.state.selection.main.head).number - 1 : -1; },
     insertBlock: (t) => insertBlock(view, t),
     insertInline: (t) => insertInline(view, t),
     setDue: (token) => setDue(view, token),

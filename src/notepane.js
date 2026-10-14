@@ -10,7 +10,9 @@ import {
 import { prepareImage, pickFiles, startRecording, recorderSupported, openAttachment, saveTextFile } from './files.js';
 import { openDatePicker } from './overlays.js';
 import { reschedule, requestPermission, permissionState } from './reminders.js';
-import { countWords, fmtDuration, ymd, longDay, parseYmd } from './md.js';
+import { countWords, fmtDuration, ymd, longDay, parseYmd, calendarCandidates, CAL_MARK } from './md.js';
+import { createAgenda } from './agenda.js';
+import * as cal from './calendar.js';
 
 const dismissedCarry = new Set();
 
@@ -22,13 +24,14 @@ export function createNotePane(root) {
   const moreBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Plus d\'actions', onclick: (e) => moreMenu(e.currentTarget), html: icon('more', 22) });
   const bar = h('header', { class: 'np-bar' }, backBtn, folderBtn, h('span', { class: 'spacer' }), status, pinBtn, moreBtn);
   const banner = h('div', { class: 'np-banner-wrap' });
+  const agenda = createAgenda();
   const host = h('div', { class: 'editor-host' });
   const toolbar = h('div', { class: 'np-toolbar', role: 'toolbar', 'aria-label': 'Mise en forme' });
   const empty = h('div', { class: 'np-empty' },
     h('div', { class: 'empty-ill', html: icon('nib', 44) }),
     h('p', {}, 'Choisissez une note, ou écrivez-en une nouvelle.'),
     h('button', { class: 'btn btn-primary', type: 'button', onclick: () => ctx.newNote() }, 'Nouvelle note'));
-  const inner = h('div', { class: 'np-inner' }, bar, banner, host, toolbar);
+  const inner = h('div', { class: 'np-inner' }, bar, banner, agenda.el, host, toolbar);
   root.append(inner, empty);
 
   let current = null;
@@ -49,6 +52,7 @@ export function createNotePane(root) {
       setBody(current.id, text, 'editor');
       flashStatus();
       reschedule();
+      proposeEventsSoon();
       if (current.kind === 'daily') renderBanner();
     },
     onFiles: (files) => attachFiles(files),
@@ -111,6 +115,49 @@ export function createNotePane(root) {
         action: { label: 'Autoriser', onClick: async () => { await requestPermission(); reschedule(); } },
       });
     }
+  }
+
+  // ——— Calendrier du téléphone : proposer d'ajouter une tâche datée et horodatée ———
+  const proposed = new Set();
+  let proposeTimer = null;
+  const clip = (s, n = 40) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+  function proposeEventsSoon() {
+    clearTimeout(proposeTimer);
+    if (cal.supported()) proposeTimer = setTimeout(proposeEvents, 2500);
+  }
+
+  function proposeEvents() {
+    if (!current || current.deletedAt) return;
+    const noteId = current.id;
+    const typing = editor.cursorLine(); // on ne propose rien pour la ligne en cours de frappe
+    const next = calendarCandidates(current.body).find((c) => c.line !== typing && !proposed.has(`${noteId}|${c.title}|${c.date}|${c.time}`));
+    if (!next) return;
+    proposed.add(`${noteId}|${next.title}|${next.date}|${next.time}`);
+    toast(`Ajouter « ${clip(next.title || 'Tâche')} » au calendrier ?`, {
+      duration: 9000,
+      action: { label: 'Ajouter', onClick: () => addToCalendar(noteId, next) },
+    });
+  }
+
+  async function addToCalendar(noteId, c) {
+    let access = await cal.permission();
+    if (access !== 'granted') access = await cal.requestAccess();
+    if (access !== 'granted') { toast('Accès au calendrier refusé. Autorisez-le dans les réglages du téléphone.'); return; }
+    try { await cal.addEvent({ title: c.title || 'Tâche', date: c.date, time: c.time }); }
+    catch (e) { toast('Ajout impossible : ' + (e?.message || e)); return; }
+    // La ligne reçoit un repère : l'événement ne sera plus proposé deux fois, même depuis un autre appareil.
+    const n = getNote(noteId);
+    const line = n && calendarCandidates(n.body).find((x) => x.title === c.title && x.date === c.date && x.time === c.time)?.line;
+    if (line != null) {
+      const lines = n.body.split('\n');
+      lines[line] = `${lines[line].trimEnd()} ${CAL_MARK}`;
+      const body = lines.join('\n');
+      setBody(noteId, body, 'calendar');
+      if (current && current.id === noteId) editor.replaceExternal(body);
+    }
+    toast('Ajouté au calendrier');
+    agenda.refresh({ force: true });
   }
 
   // ——— Pièces jointes ———
@@ -275,11 +322,14 @@ export function createNotePane(root) {
     } else if (line != null) editor.focusLine(line);
     status.classList.remove('on');
     renderBar(); renderBanner();
+    agenda.show(n);
     return true;
   }
 
   function leave() {
     if (!current) return;
+    clearTimeout(proposeTimer);
+    agenda.hide();
     if (!current.deletedAt) editor.normalize();
     flush();
     discardIfEmpty(current.id);

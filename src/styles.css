@@ -229,6 +229,31 @@ kbd { font: 500 11px/1 var(--ui); color: var(--muted); background: var(--surface
 .np-banner > span:first-child { display: inline-flex; }
 .np-banner .btn-quiet { color: var(--amber-2); }
 .editor-host { flex: 1; min-height: 0; position: relative; }
+/* Agenda de la note du jour */
+.agenda { margin: 6px 14px 0; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); flex: none; max-height: 52vh; overflow-y: auto; }
+.agenda[hidden] { display: none; }
+.ag-head { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px 10px 14px; text-align: left; color: var(--text-2); font-size: 13.5px; }
+.ag-ic { display: inline-flex; color: var(--amber); }
+.ag-name { font-weight: 600; color: var(--text); }
+.ag-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.ag-chev { display: inline-flex; color: var(--muted); }
+.ag-body { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 10px; }
+.ag-body[hidden] { display: none; }
+.ag-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 2px; }
+.ag-n { color: var(--faint); font-variant-numeric: tabular-nums; }
+.ag-row { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; font-size: 14px; }
+.ag-time { flex: none; width: 3.9em; color: var(--amber); font-variant-numeric: tabular-nums; font-weight: 520; padding-top: 1px; }
+.ag-title { flex: 1; min-width: 0; display: flex; flex-direction: column; color: var(--text); overflow-wrap: anywhere; }
+.ag-sub { font-size: 12px; color: var(--muted); }
+.ag-task { align-items: center; }
+.ag-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; }
+.ag-empty { color: var(--muted); font-size: 13.5px; padding: 3px 0; }
+.ag-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.ag-note > span { flex: 1 1 14em; }
+.ag-more { align-self: flex-start; padding: 4px 0; font-size: 13px; color: var(--amber); }
+.ag-day { display: flex; gap: 10px; padding: 3px 0; font-size: 13.5px; }
+.ag-dname { flex: none; width: 4.4em; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ag-ditems { flex: 1; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
 .np-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--muted); text-align: center; padding: 32px; }
 .np-empty p { max-width: 28ch; }
 
