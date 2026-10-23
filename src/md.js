@@ -474,7 +474,9 @@ export function parseProps(body) {
 export const isPropLine = (text) => PROP_RE.test(text.trim());
 
 // ——— Durées « ⏱ 1h30 » (temps passé) ———
-const DUR_RE = /⏱\s*(?:(\d{1,2})\s*h\s*(\d{1,2})?|(\d+(?:[.,]\d+)?)\s*h(?![a-zà-ÿ])|(\d{1,3})\s*(?:min|mn|m)(?![a-zà-ÿ]))/giu;
+const MARK = '(?:⏱|(?<![\\p{L}])(?:temps|durée|duree|tps)\\s*[:=])';
+export const hasDuration = (line) => new RegExp(MARK, 'iu').test(line);
+const DUR_RE = new RegExp(MARK + String.raw`\s*(?:(\d{1,2})\s*h\s*(\d{1,2})?|(\d+(?:[.,]\d+)?)\s*h(?![a-zà-ÿ])|(\d{1,3})\s*(?:min|mn|m)(?![a-zà-ÿ]))`, 'giu');
 
 /** Durées d'un texte, en minutes : [{ minutes, index }]. */
 export function parseDurations(body) {
@@ -483,7 +485,7 @@ export function parseDurations(body) {
   let offset = 0;
   for (const raw of String(body).split('\n')) {
     if (FENCE_RE.test(raw)) fence = !fence;
-    else if (!fence && raw.includes('⏱')) {
+    else if (!fence && hasDuration(raw)) {
       DUR_RE.lastIndex = 0;
       let m;
       while ((m = DUR_RE.exec(raw))) {

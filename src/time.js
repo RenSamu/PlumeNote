@@ -3,7 +3,7 @@ import { h, toast } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
 import { liveNotes } from './store.js';
-import { ymd, parseYmd, addDays, startOfDay, parseDurations, fmtMinutes, wikiSpans, relTime } from './md.js';
+import { ymd, parseYmd, addDays, startOfDay, parseDurations, hasDuration, fmtMinutes, wikiSpans, relTime } from './md.js';
 
 const PERIODS = [
   ['week', 'Cette semaine'],
@@ -27,12 +27,12 @@ export function timeEntries(from, to) {
   const a = ymd(from), b = ymd(to);
   const out = [];
   for (const n of liveNotes()) {
-    if (n.kind === 'template' || !n.body.includes('⏱')) continue;
+    if (n.kind === 'template' || !hasDuration(n.body)) continue;
     const date = n.kind === 'daily' && n.date ? n.date : ymd(new Date(n.createdAt));
     if (date < a || date >= b) continue;
     const noteClient = (wikiSpans(n.body)[0] || {}).title || null;
     for (const line of n.body.split('\n')) {
-      if (!line.includes('⏱')) continue;
+      if (!hasDuration(line)) continue;
       const links = wikiSpans(line);
       for (const d of parseDurations(line)) {
         out.push({ date, minutes: d.minutes, client: (links[0] && links[0].title) || noteClient || 'Sans client', note: n });
@@ -75,7 +75,7 @@ export function renderTime(extra, body, countEl) {
     body.appendChild(h('div', { class: 'empty' },
       h('div', { class: 'empty-ill', html: icon('clock', 40) }),
       h('h3', {}, 'Aucun temps noté sur cette période'),
-      h('p', {}, 'Écrivez « ⏱ 1h30 » (ou « ⏱ 45min ») dans une note, par exemple avec le modèle Intervention client. Mettez [[le nom du client]] sur la même ligne pour le total par client.')));
+      h('p', {}, 'Écrivez « temps: 1h30 » (ou « temps: 45min », ou avec ⏱) dans une note, par exemple avec le modèle Intervention client. Mettez [[le nom du client]] sur la même ligne pour le total par client.')));
     return;
   }
   const max = byClient[0][1];

@@ -67,6 +67,6 @@ Les clés publiques du projet sont dans `src/config.js`.
 
 - **Habitudes** (menu « Habitudes ») : saisir « Sport 3/semaine » ou « Méditer » (chaque jour). Une note par habitude, lignes `⟳ 3/semaine`, `⏰ HH:MM` (rappel avec bouton *Fait*), `✓ AAAA-MM-JJ` (jours validés). Semaine en 7 boutons, série (jours ou semaines).
 - **Modèles** : Intervention client, Compte rendu, Poème, Fiche de lecture, Fiche de film, Idée de projet ; « Enregistrer comme modèle » depuis le menu ⋯ d'une note. Marqueurs : `{{date}} {{iso}} {{heure}} {{curseur}}`.
-- **Temps passé** : écrire `⏱ 1h30`, `⏱ 45min` ou `⏱ 1,5h` dans une note ; le client est le `[[lien]]` de la même ligne, sinon le premier lien de la note. Résumé copiable pour un ticket.
+- **Temps passé** : écrire `temps: 1h30`, `temps: 45min` ou `temps: 1,5h` (ou avec ⏱, ou `durée:`, `tps:`) dans une note ; le client est le `[[lien]]` de la même ligne, sinon le premier lien de la note. Résumé copiable pour un ticket.
 - **Collections** : propriétés `clé:: valeur` (ex. `statut:: lu`, `note:: 5`) ; pastilles dans la liste, filtre par statut dans les vues d'étiquette.
 - **Mode écriture** (menu ⋯) : plein écran, compteur de syllabes ≈ (automatique avec #poème), versions. Les versions restent sur l'appareil (non synchronisées). Le décompte de syllabes est approximatif (pas de diérèse).

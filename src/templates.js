@@ -7,7 +7,7 @@ import { longDay, ymd } from './md.js';
 
 export const BUILTIN = [
   { id: 'intervention', name: 'Intervention client', hint: 'Problème, actions, durée, suite',
-    body: '# Intervention {{iso}}\n#intervention\nClient : [[Nom du client]]\nDate : {{date}} à {{heure}}\n\n## Problème\n{{curseur}}\n\n## Actions\n- \n\n## Matériel\n- \n\n⏱ 0h30\n\n## À suivre\n- [ ] \n' },
+    body: '# Intervention {{iso}}\n#intervention\nClient : [[Nom du client]]\nDate : {{date}} à {{heure}}\n\n## Problème\n{{curseur}}\n\n## Actions\n- \n\n## Matériel\n- \n\ntemps: 0h30\n\n## À suivre\n- [ ] \n' },
   { id: 'reunion', name: 'Compte rendu de réunion', hint: 'Participants, décisions, actions',
     body: '# Réunion {{iso}}\n#réunion\nDate : {{date}} à {{heure}}\nParticipants : \n\n## Points abordés\n{{curseur}}\n\n## Décisions\n- \n\n## Actions\n- [ ] \n' },
   { id: 'poeme', name: 'Poème', hint: 'Page blanche, étiquette #poème',
