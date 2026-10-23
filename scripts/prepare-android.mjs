@@ -84,6 +84,27 @@ $1`);
   }
 }
 
+// Widget Agenda + dictée vocale (bloc séparé pour qu'un projet déjà préparé le reçoive aussi)
+{
+  let t = fs.readFileSync(mf, 'utf8');
+  if (!t.includes('.AgendaWidget')) {
+    t = t.replace(/(<\/application>)/, `
+        <receiver android:name=".AgendaWidget" android:exported="true" android:label="Plume Agenda">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/agenda_widget_info" />
+        </receiver>
+    $1`);
+  }
+  if (!t.includes('android.speech.RecognitionService')) {
+    // Android 11+ : sans cette déclaration, la reconnaissance vocale est invisible pour l'application.
+    t = t.replace(/(<\/manifest>)/, `    <queries>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+    </queries>
+$1`);
+  }
+  fs.writeFileSync(mf, t);
+}
+
 // Raccourcis d'icône (appui long) — mêmes liens plume://
 fs.writeFileSync(path.join(main, 'res/xml/shortcuts.xml'), `<?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
@@ -97,12 +118,22 @@ fs.writeFileSync(path.join(main, 'res/xml/shortcuts.xml'), `<?xml version="1.0" 
         <intent android:action="android.intent.action.VIEW" android:data="plume://today"
             android:targetPackage="${PKG}" android:targetClass="${PKG}.MainActivity" />
     </shortcut>
+    <shortcut android:shortcutId="dictate" android:enabled="true" android:icon="@drawable/ic_tile_plume"
+        android:shortcutShortLabel="@string/sc_dictate" android:shortcutLongLabel="@string/sc_dictate_long">
+        <intent android:action="android.intent.action.VIEW" android:data="plume://dictate?mode=task"
+            android:targetPackage="${PKG}" android:targetClass="${PKG}.MainActivity" />
+    </shortcut>
 </shortcuts>
 `);
 const strings = path.join(main, 'res/values/strings.xml');
 let s = fs.readFileSync(strings, 'utf8');
 if (!s.includes('sc_new')) {
   s = s.replace('</resources>', '    <string name="sc_new">Nouvelle note</string>\n    <string name="sc_today">Aujourd’hui</string>\n</resources>');
+  fs.writeFileSync(strings, s);
+}
+
+if (!s.includes('sc_dictate')) {
+  s = s.replace('</resources>', '    <string name="sc_dictate">Dicter</string>\n    <string name="sc_dictate_long">Dicter une tâche</string>\n</resources>');
   fs.writeFileSync(strings, s);
 }
 

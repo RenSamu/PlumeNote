@@ -49,6 +49,7 @@ export function stripInline(s) {
     .replace(/(^|\s)[*_]([^*_\n]+)[*_](?=\s|$|[.,;:!?])/g, '$1$2')
     .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+\[[ xX]\]\s?|[-*+]\s+|\d+[.)]\s+)/, '')
     .replace(/@\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?/g, '')
+    .replace(/\s*↻(?:\d{1,2})?(?:jours?|semaines?|mois|ans?|ouvr[ée]s?)(?![a-zà-ÿ])/giu, '')
     .trim();
 }
 
@@ -112,8 +113,9 @@ export function parseTasks(body) {
     const raw = m[3];
     const dm = DUE_RE.exec(raw);
     const due = dm ? { date: dm[1], time: dm[2] ? dm[2].padStart(5, '0') : null } : null;
-    const text = raw.replace(new RegExp(DUE_RE.source, 'g'), '').replace(/\s{2,}/g, ' ').trim();
-    tasks.push({ line: i, done: m[2] !== ' ', text, due, raw });
+    const rec = parseRec(raw);
+    const text = stripRec(raw.replace(new RegExp(DUE_RE.source, 'g'), '')).replace(/\s{2,}/g, ' ').trim();
+    tasks.push({ line: i, done: m[2] !== ' ', text, due, rec, raw });
   }
   return tasks;
 }
@@ -178,18 +180,158 @@ function resolveToken(tok, now) {
   return null;
 }
 
-// Date écrite en clair, avec une heure obligatoire : « demain 14h », « le mardi à 9h30 », « 15/10 14:00 ».
-// Réservée aux lignes de tâche sans échéance, pour ne pas toucher au texte courant.
+// ——— Heures et dates écrites en clair ———
+
+// Heure : « 14h », « 14h30 », « 14:30 », « à 14 h », « à 14 heures 30 » (formes de la dictée vocale comprises).
+const TIME_SRC = '(?:(?:[àa]\\s+)?(?:(\\d{1,2})h(\\d{2})?|(\\d{1,2}):(\\d{2}))|[àa]\\s+(\\d{1,2})\\s*(?:h|heures?)\\s*(\\d{2})?)';
+function timeOf(g) {
+  let h, m;
+  if (g[0] !== undefined) { h = +g[0]; m = +(g[1] || 0); }
+  else if (g[2] !== undefined) { h = +g[2]; m = +g[3]; }
+  else if (g[4] !== undefined) { h = +g[4]; m = +(g[5] || 0); }
+  else return null;
+  return h <= 23 && m <= 59 ? { h, m } : null;
+}
+const hhmm = (t) => `${pad(t.h)}:${pad(t.m)}`;
+export const timeStr = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const END = '(?=\\s|$|[.,;:!?)])';
+
+// Jour + heure : « demain 14h », « le mardi à 9h30 », « 15/10 14:00 ». Heure obligatoire.
 const NAT_RE = new RegExp(
-  "(^|\\s)(?:le\\s+)?(apr[eè]s-?demain|demain|aujourd['’]?hui|dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi|\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)" +
-    "\\s+(?:[àa]\\s+)?(\\d{1,2})(?:h(\\d{2})?|:(\\d{2}))(?=\\s|$|[.,;:!?)])",
+  "(^|\\s)(?:le\\s+)?(apr[eè]s-?demain|demain|aujourd['’]?hui|dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi|\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)\\s+" + TIME_SRC + END,
   'giu'
 );
+const TIME_ONLY_RE = new RegExp('(^|\\s)' + TIME_SRC + END, 'iu');
 
-/** Vrai si la ligne peut contenir une date à normaliser (test rapide avant le travail réel). */
-export const maybeDated = (line) => line.includes('@') || /\d\s*h|\d:\d/i.test(line);
+/** Vrai si la ligne peut contenir une date ou une récurrence à normaliser (test rapide avant le vrai travail). */
+export const maybeDated = (line) =>
+  line.includes('@') || /\d\s*h|\d:\d/i.test(line) || /chaque|tous\s+les|toutes\s+les|quotidien|hebdo|mensuel|annuel|en\s+semaine/i.test(line);
 
-/** Remplace @demain 14h, @lun, @+3j, @12/10… par @AAAA-MM-JJ [HH:MM] sur les lignes de tâche. */
+// ——— Récurrence : « chaque lundi », « tous les 2 jours », « chaque mois le 15 »… ———
+
+const DAYS_SRC = 'lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche';
+const REC_PHRASE = new RegExp(
+  '(^|\\s)(?:(?:chaque|tous\\s+les|toutes\\s+les)\\s+(?:(\\d{1,2})\\s+)?(jours?\\s+ouvr[ée]s?|jours?|semaines?|mois|ann[ée]es?|ans?|(?:' + DAYS_SRC + ')s?)' +
+    '|(quotidien(?:ne)?|hebdo(?:madaire)?|mensuel(?:le)?|annuel(?:le)?|en\\s+semaine))' +
+    '(?:\\s+le\\s+(\\d{1,2})(?:er)?)?' + END,
+  'iu'
+);
+const WEEKDAY_NUM = { dimanche: 0, lundi: 1, mardi: 2, mercredi: 3, jeudi: 4, vendredi: 5, samedi: 6 };
+
+// Jeton écrit dans la ligne : ↻jour, ↻3jours, ↻semaine, ↻2semaines, ↻mois, ↻an, ↻ouvré
+const REC_SRC = '↻(\\d{1,2})?(jours?|semaines?|mois|ans?|ouvr[ée]s?)(?![a-zà-ÿ])';
+const unitKey = (u) => (/^j/.test(u) ? 'j' : /^s/.test(u) ? 'sem' : /^m/.test(u) ? 'mois' : /^a/.test(u) ? 'an' : 'ouv');
+
+export function parseRec(raw) {
+  const m = new RegExp(REC_SRC, 'iu').exec(raw);
+  if (!m) return null;
+  const unit = unitKey(m[2].toLowerCase());
+  return { n: unit === 'ouv' ? 1 : m[1] ? Math.max(1, +m[1]) : 1, unit };
+}
+export function recSpans(text) {
+  const re = new RegExp(REC_SRC, 'giu');
+  const out = [];
+  let m;
+  while ((m = re.exec(text))) out.push([m.index, m.index + m[0].length]);
+  return out;
+}
+export const stripRec = (s) => s.replace(new RegExp('\\s*' + REC_SRC, 'giu'), '');
+
+const REC_WORDS = { j: ['jour', 'jours'], sem: ['semaine', 'semaines'], mois: ['mois', 'mois'], an: ['an', 'ans'], ouv: ['ouvré', 'ouvrés'] };
+export function recToken({ n, unit }) {
+  const w = REC_WORDS[unit];
+  return '↻' + (n > 1 && unit !== 'ouv' ? n + w[1] : w[0]);
+}
+export function recLabel({ n, unit }) {
+  if (unit === 'ouv') return 'chaque jour ouvré';
+  if (unit === 'j') return n > 1 ? `tous les ${n} jours` : 'chaque jour';
+  if (unit === 'sem') return n > 1 ? `toutes les ${n} semaines` : 'chaque semaine';
+  if (unit === 'mois') return n > 1 ? `tous les ${n} mois` : 'chaque mois';
+  return n > 1 ? `tous les ${n} ans` : 'chaque année';
+}
+
+const DAY_MS = 86400000;
+const dayDiff = (a, b) => Math.round((startOfDay(b) - startOfDay(a)) / DAY_MS);
+const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+function addMonths(d, k, anchor = d.getDate()) {
+  const t = d.getFullYear() * 12 + d.getMonth() + k;
+  const y = Math.floor(t / 12), mo = t % 12;
+  return new Date(y, mo, Math.min(anchor, daysInMonth(y, mo)));
+}
+const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
+
+/** Première occurrence strictement après `base` d'une série qui part de `from`. */
+function occurrenceAfter(from, rec, base) {
+  from = startOfDay(from); base = startOfDay(base);
+  if (rec.unit === 'ouv') {
+    let r = addDays(base, 1);
+    while (isWeekend(r)) r = addDays(r, 1);
+    return startOfDay(r);
+  }
+  if (rec.unit === 'j' || rec.unit === 'sem') {
+    const step = rec.n * (rec.unit === 'sem' ? 7 : 1);
+    const k = Math.floor(dayDiff(from, base) / step) + 1;
+    return startOfDay(addDays(from, Math.max(1, k) * step));
+  }
+  const months = rec.unit === 'mois' ? rec.n : rec.n * 12;
+  const anchor = from.getDate();
+  let r = from, guard = 0;
+  do { r = addMonths(r, months, anchor); } while (r <= base && ++guard < 1200);
+  return r;
+}
+
+/** Première échéance d'une série tapée à la main (« chaque lundi 16h ») : aujourd'hui ou le jour voulu, sinon la suivante. */
+function firstDue(spec, time, now) {
+  const today = startOfDay(now);
+  let d = today;
+  if (spec.weekday != null) d = addDays(today, (spec.weekday - today.getDay() + 7) % 7);
+  else if (spec.unit === 'mois' && spec.dom) {
+    d = new Date(today.getFullYear(), today.getMonth(), Math.min(spec.dom, daysInMonth(today.getFullYear(), today.getMonth())));
+    if (d < today) d = addMonths(today, 1, spec.dom);
+  }
+  if (spec.unit === 'ouv') while (isWeekend(d)) d = addDays(d, 1);
+  const passed = time && new Date(d.getFullYear(), d.getMonth(), d.getDate(), time.h, time.m) <= now;
+  if (passed) d = occurrenceAfter(d, spec, d);
+  return startOfDay(d);
+}
+
+function specFromPhrase(m) {
+  const word = (m[3] || m[4] || '').toLowerCase().replace(/\s+/g, ' ');
+  const n = m[2] ? Math.max(1, +m[2]) : 1;
+  let spec;
+  if (/^jours? ouvr|^en semaine/.test(word)) spec = { n: 1, unit: 'ouv' };
+  else if (/^jour|^quotidien/.test(word)) spec = { n, unit: 'j' };
+  else if (/^semaine|^hebdo/.test(word)) spec = { n, unit: 'sem' };
+  else if (/^mois|^mensuel/.test(word)) spec = { n, unit: 'mois', dom: m[5] ? Math.min(31, +m[5]) : null };
+  else if (/^an|^annuel/.test(word)) spec = { n, unit: 'an' };
+  else {
+    const wd = WEEKDAY_NUM[word.replace(/s$/, '')];
+    if (wd === undefined) return null;
+    spec = { n: 1, unit: 'sem', weekday: wd };
+  }
+  return spec;
+}
+
+/** « Rapport chaque vendredi 16h » → « Rapport @2026-10-16 16:00 ↻semaine ». */
+function recurrenceLine(line, now) {
+  const m = REC_PHRASE.exec(line);
+  if (!m) return line;
+  const spec = specFromPhrase(m);
+  if (!spec) return line;
+  let rest = line.slice(0, m.index) + m[1] + line.slice(m.index + m[0].length);
+  rest = stripRec(rest);
+  let due = DUE_RE.exec(rest);
+  if (!due) {
+    const tm = TIME_ONLY_RE.exec(rest);
+    const time = tm ? timeOf(tm.slice(2, 8)) : null;
+    if (tm && time) rest = rest.slice(0, tm.index) + tm[1] + rest.slice(tm.index + tm[0].length);
+    const d = firstDue(spec, time, now);
+    rest = rest.replace(/(\S)\s{2,}(?=\S)/g, '$1 ').trimEnd() + ` @${ymd(d)}${time ? ' ' + hhmm(time) : ''}`;
+  } else rest = rest.replace(/(\S)\s{2,}(?=\S)/g, '$1 ').trimEnd();
+  return `${rest} ${recToken(spec)}`;
+}
+
+/** Remplace @demain 14h, @lun, @+3j, @12/10… par @AAAA-MM-JJ [HH:MM], et « demain 14h » / « chaque lundi » sur les lignes de tâche. */
 export function normalizeDates(text, now = new Date()) {
   let changed = false;
   const lines = text.split('\n').map((line) => {
@@ -207,17 +349,41 @@ export function normalizeDates(text, now = new Date()) {
         return r;
       });
     }
+    if (/chaque|tous\s+les|toutes\s+les|quotidien|hebdo|mensuel|annuel|en\s+semaine/i.test(out)) out = recurrenceLine(out, now);
     if (!DUE_RE.test(out) && /\d\s*h|\d:\d/i.test(out)) {
-      out = out.replace(NAT_RE, (all, pre, tok, hh, mmH, mmC) => {
+      out = out.replace(NAT_RE, (all, pre, tok, ...g) => {
         const d = resolveToken(tok, now);
-        if (!d || +hh > 23) return all;
-        return `${pre}@${ymd(d)} ${pad(+hh)}:${pad(Math.min(59, +(mmH || mmC || 0)))}`;
+        const t = timeOf(g.slice(0, 6));
+        return d && t ? `${pre}@${ymd(d)} ${hhmm(t)}` : all;
       });
     }
     if (out !== line) changed = true;
     return out;
   });
   return changed ? lines.join('\n') : text;
+}
+
+/** Remplace (ou ajoute) l'échéance d'une ligne de tâche. */
+export function setDueOnLine(line, dateStr, timeStr) {
+  const tok = `@${dateStr}${timeStr ? ' ' + timeStr : ''}`;
+  if (DUE_RE.test(line)) return line.replace(DUE_RE, tok);
+  const i = line.search(new RegExp(REC_SRC, 'iu'));
+  if (i >= 0) return `${line.slice(0, i).trimEnd()} ${tok} ${line.slice(i)}`;
+  return `${line.trimEnd()} ${tok}`;
+}
+
+/** Tâche récurrente cochée : la ligne reste ouverte et passe à la prochaine échéance. Retourne null si la ligne n'est pas récurrente. */
+export function advanceLine(line, now = new Date()) {
+  if (!TASK_RE.test(line)) return null;
+  const rec = parseRec(line);
+  if (!rec) return null;
+  const dm = DUE_RE.exec(line);
+  const from = dm ? parseYmd(dm[1]) : startOfDay(now);
+  const time = dm && dm[2] ? dm[2].padStart(5, '0') : null;
+  const base = new Date(Math.max(from.getTime(), startOfDay(now).getTime()));
+  const next = occurrenceAfter(from, rec, base);
+  const out = setDueOnLine(line, ymd(next), time).replace(/\s*📅/g, '');
+  return { line: out, date: ymd(next), time };
 }
 
 // ——— Calendrier du téléphone ———

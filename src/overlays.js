@@ -144,6 +144,8 @@ export function openSettings() {
       const stats = storageStats();
       const time = h('input', { class: 'field narrow', type: 'time', value: state.settings.reminderTime, 'aria-label': 'Heure des rappels par défaut',
         onchange: (e) => { if (e.target.value) { setSetting('reminderTime', e.target.value); reschedule(); } } });
+      const mtime = h('input', { class: 'field narrow', type: 'time', value: state.settings.morningTime || '07:30', 'aria-label': 'Heure du point du matin',
+        onchange: (e) => { if (e.target.value) { setSetting('morningTime', e.target.value); reschedule(); } } });
 
       return h('div', { class: 'settings-body' },
         h('section', {},
@@ -152,7 +154,10 @@ export function openSettings() {
         h('section', {},
           h('h3', {}, 'Rappels'),
           h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Notifications'), permText), permBtn),
-          h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure par défaut'), h('div', { class: 'set-desc' }, "Pour une échéance sans heure précise.")), time)),
+          h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure par défaut'), h('div', { class: 'set-desc' }, "Pour une échéance sans heure précise.")), time),
+          toggle('Point du matin', 'Une notification chaque matin : vos rendez-vous et vos tâches du jour (rien si la journée est vide).', state.settings.morningOn !== false,
+            async (v) => { setSetting('morningOn', v); if (v && (await permissionState()) !== 'granted') { await requestPermission(); refreshPerm(); } reschedule(); }),
+          h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure du point du matin')), mtime)),
         h('section', {},
           h('h3', {}, 'Données'),
           h('p', { class: 'set-desc flat' }, `${stats.notes} note${stats.notes > 1 ? 's' : ''}, ${stats.attachments} pièce${stats.attachments > 1 ? 's' : ''} jointe${stats.attachments > 1 ? 's' : ''} (${humanSize(stats.attachmentBytes)}), stockées sur cet appareil.`),

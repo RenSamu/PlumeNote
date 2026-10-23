@@ -5,7 +5,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language';
 import { icon } from './icons.js';
-import { normalizeDates, maybeDated, parseTasks, dueState, fmtDuration, humanSize } from './md.js';
+import { normalizeDates, maybeDated, advanceLine, dueLabel, recSpans, parseTasks, dueState, fmtDuration, humanSize } from './md.js';
 
 // Points d'accès fournis par l'application (pièces jointes, aperçu image…)
 export const hooks = {
@@ -13,6 +13,7 @@ export const hooks = {
   url: async () => null,
   open: () => {},
   lightbox: () => {},
+  notice: () => {},
 };
 
 const external = Annotation.define();
@@ -41,6 +42,15 @@ class CheckWidget extends WidgetType {
       const idx = line.text.search(/\[[ xX]\]/);
       if (idx < 0) return;
       const done = line.text[idx + 1] !== ' ';
+      if (!done) {
+        // Tâche récurrente : elle reste ouverte et passe à la prochaine échéance.
+        const adv = advanceLine(line.text);
+        if (adv) {
+          view.dispatch({ changes: { from: line.from, to: line.to, insert: adv.line } });
+          hooks.notice(`Prochaine fois : ${dueLabel({ date: adv.date, time: adv.time })}`);
+          return;
+        }
+      }
       view.dispatch({ changes: { from: line.from + idx + 1, to: line.from + idx + 2, insert: done ? ' ' : 'x' } });
     });
     return el;
@@ -282,7 +292,7 @@ function build(state) {
   const inCode = (pos) => code.some(([a, b]) => pos >= a && pos <= b);
   for (let i = 1; i <= doc.lines; i++) {
     const l = doc.line(i);
-    if (!l.text.includes('#') && !l.text.includes('@')) continue;
+    if (!l.text.includes('#') && !l.text.includes('@') && !l.text.includes('↻')) continue;
     if (inCode(l.from)) continue;
     let m;
     TAG_RE.lastIndex = 0;
@@ -299,6 +309,9 @@ function build(state) {
         const st = task ? (task.done ? 'done' : dueState(task.due, false)) : '';
         put(from, from + m[0].length, mark('cm-due' + (st ? ' cm-due-' + st : '')));
       }
+    }
+    if (l.text.includes('↻')) {
+      for (const [a, b] of recSpans(l.text)) if (!inCode(l.from + a)) put(l.from + a, l.from + b, mark('cm-due cm-rec'));
     }
   }
 

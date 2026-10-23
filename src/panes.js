@@ -1,4 +1,5 @@
 // Barre latérale, liste des notes, vue des tâches.
+import { dictateSheet, supported as dictSupported } from './dictate-ui.js';
 import { h } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
@@ -207,11 +208,11 @@ function taskRow(t) {
   const st = dueState(t.due, t.done);
   return h('div', { class: 'task' + (t.done ? ' done' : '') },
     h('button', { class: 'check' + (t.done ? ' on' : ''), type: 'button', role: 'checkbox', 'aria-checked': String(t.done), 'aria-label': t.done ? 'Rouvrir la tâche' : 'Terminer la tâche',
-      onclick: () => toggleTaskLine(t.noteId, t.line), html: t.done ? icon('check', 15) : '' }),
+      onclick: () => { const r = toggleTaskLine(t.noteId, t.line); if (r) toast(`Prochaine fois : ${dueLabel({ date: r.next, time: r.time })}`); }, html: t.done ? icon('check', 15) : '' }),
     h('button', { class: 'task-main', type: 'button', onclick: () => ctx.openNote(t.noteId, { line: t.line }) },
       h('span', { class: 'task-text' }, t.text || 'Tâche sans titre'),
       h('span', { class: 'task-sub' }, t.noteTitle || 'Note sans titre')),
-    t.due ? h('span', { class: 'chip chip-' + (st || 'plain') }, dueLabel(t.due)) : null);
+    t.due ? h('span', { class: 'chip chip-' + (st || 'plain') }, (t.rec ? '↻ ' : '') + dueLabel(t.due)) : null);
 }
 
 function renderTasks(extra, body, countEl) {
@@ -227,7 +228,9 @@ function renderTasks(extra, body, countEl) {
       toast('Ajoutée au journal du jour');
     };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-    extra.replaceChildren(h('div', { class: 'quick-add' }, h('span', { html: icon('plus', 18) }), input,
+    const micBtn = dictSupported() ? h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Dicter une tâche', title: 'Dicter une tâche',
+      onclick: async () => { const t = await dictateSheet({ title: 'Dicter une tâche' }); if (t) { input.value = t.replace(/\s*\n\s*/g, ' '); submit(); } }, html: icon('speech', 18) }) : null;
+    extra.replaceChildren(h('div', { class: 'quick-add' }, h('span', { html: icon('plus', 18) }), input, micBtn,
       h('button', { class: 'btn btn-primary sm', type: 'button', onclick: submit }, 'Ajouter')));
   }
 

@@ -37,6 +37,7 @@ const ICONS = {
   hash: P('M9.5 4L8 20M16 4l-1.5 16M5 9h15M4 15h15'),
   code: P('M8.5 7L4 12l4.5 5M15.5 7L20 12l-4.5 5'),
   sort: P('M7 5v14M4 16l3 3 3-3M17 19V5M14 8l3-3 3 3'),
+  speech: P('M4 12h.01M8 8.5v7M12 5v14M16 8.5v7M20 12h.01'),
   chevron: P('M9 6l6 6-6 6'),
   down: P('M6 9l6 6 6-6'),
   copy: P('M9 9h10v10H9zM5 15V5h10'),

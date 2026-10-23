@@ -2,12 +2,15 @@
 import { db } from './db.js';
 import {
   titleOf, snippetOf, plainText, extractTags, parseTasks, ymd, longDay, parseYmd, dueDate,
+  advanceLine, setDueOnLine, timeStr, addDays, startOfDay, dueLabel,
 } from './md.js';
 
 const TRASH_DAYS = 30;
 const DEFAULT_SETTINGS = {
   openOnNew: true,
   reminderTime: '09:00',
+  morningOn: true,
+  morningTime: '07:30',
   sort: 'updated',
 };
 
@@ -268,12 +271,55 @@ export function allTasks() {
   return out;
 }
 
+/**
+ * Coche ou décoche une tâche. Une tâche récurrente cochée reste ouverte et passe à la prochaine échéance :
+ * dans ce cas le résultat est { next: 'AAAA-MM-JJ', time }.
+ */
 export function toggleTaskLine(noteId, line) {
-  const n = getNote(noteId); if (!n) return;
+  const n = getNote(noteId); if (!n) return null;
   const lines = n.body.split('\n');
-  const l = lines[line]; if (l === undefined) return;
-  lines[line] = /\[ \]/.test(l) ? l.replace('[ ]', '[x]') : l.replace(/\[[xX]\]/, '[ ]');
+  const l = lines[line]; if (l === undefined) return null;
+  let result = null;
+  if (/\[ \]/.test(l)) {
+    const adv = advanceLine(l);
+    if (adv) { lines[line] = adv.line; result = { next: adv.date, time: adv.time }; }
+    else lines[line] = l.replace('[ ]', '[x]');
+  } else lines[line] = l.replace(/\[[xX]\]/, '[ ]');
   setBody(noteId, lines.join('\n'), 'tasks');
+  return result;
+}
+
+/** Retrouve une tâche ouverte par son texte (la ligne a pu bouger depuis la programmation du rappel). */
+function findOpenTask(n, text, hint) {
+  const open = parseTasks(n.body).filter((t) => !t.done && t.text === text);
+  return open.find((t) => t.line === hint) || open[0] || null;
+}
+
+/**
+ * Actions des boutons de notification : 'done', 'hour' (dans 1 h), 'tomorrow'.
+ * Retourne { text, label } pour confirmer à l'écran, ou null si la tâche n'existe plus.
+ */
+export function applyTaskAction(noteId, { text, line }, action, now = new Date()) {
+  const n = getNote(noteId); if (!n) return null;
+  const t = findOpenTask(n, text, line); if (!t) return null;
+  if (action === 'done') {
+    const r = toggleTaskLine(noteId, t.line);
+    return { text: t.text, label: r ? `Prochaine fois : ${dueLabel({ date: r.next, time: r.time }, now)}` : 'Terminée' };
+  }
+  const lines = n.body.split('\n');
+  if (action === 'hour') {
+    const at = new Date(Math.ceil((now.getTime() + 3600000) / 300000) * 300000); // dans 1 h, arrondi aux 5 min
+    lines[t.line] = setDueOnLine(lines[t.line], ymd(at), timeStr(at));
+    setBody(noteId, lines.join('\n'), 'tasks');
+    return { text: t.text, label: `Reportée à ${timeStr(at)}` };
+  }
+  if (action === 'tomorrow') {
+    const d = addDays(startOfDay(now), 1);
+    lines[t.line] = setDueOnLine(lines[t.line], ymd(d), t.due?.time || null);
+    setBody(noteId, lines.join('\n'), 'tasks');
+    return { text: t.text, label: 'Reportée à demain' };
+  }
+  return null;
 }
 
 export function appendTaskToToday(text) {

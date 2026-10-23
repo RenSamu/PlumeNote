@@ -1,4 +1,5 @@
 // Panneau d'édition d'une note.
+import { dictateSheet, supported as dictSupported } from './dictate-ui.js';
 import { h, openMenu, toast, lightbox, confirmDialog, promptDialog } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
@@ -40,6 +41,7 @@ export function createNotePane(root) {
   // Pièces jointes : points d'accès pour l'éditeur
   hooks.meta = (id) => state.atts.get(id) || null;
   hooks.url = (id) => attachmentUrl(id);
+  hooks.notice = (t) => toast(t);
   hooks.open = (m) => openAttachment(m).catch((e) => toast(e.message || 'Impossible d\'ouvrir ce fichier.'));
   hooks.lightbox = async (m) => {
     const u = await attachmentUrl(m.id);
@@ -86,6 +88,7 @@ export function createNotePane(root) {
       tb('hash', 'Étiquette', () => editor.run('tag')),
       sep(),
       tb('image', 'Ajouter une image', () => addImages()),
+      ...(dictSupported() ? [tb('speech', 'Dicter du texte', () => dictate())] : []),
       tb('mic', 'Enregistrer une note vocale', () => startVoice(), 'mic'),
       tb('clip', 'Joindre un fichier', () => addFiles()),
       sep(),
@@ -181,6 +184,13 @@ export function createNotePane(root) {
 
   // ——— Voix ———
   let rec = null, recTimer = null;
+  async function dictate() {
+    const t = await dictateSheet({ title: 'Dictée' });
+    if (!t || !current) return;
+    editor.focus();
+    editor.insertInline(t.replace(/\n/g, '\n'));
+  }
+
   async function startVoice() {
     if (!recorderSupported()) { toast('L\'enregistrement audio n\'est pas disponible ici.'); return; }
     if (rec) return;

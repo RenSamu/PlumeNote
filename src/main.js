@@ -1,4 +1,5 @@
 // Plume — démarrage, routage, actions.
+import { dictateSheet, supported as dictSupported } from './dictate-ui.js';
 import { Capacitor, SystemBars, SystemBarsStyle } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { h, toast, closeTopLayer, hasLayer, frame } from './ui.js';
@@ -6,12 +7,13 @@ import { icon } from './icons.js';
 import { ctx } from './ctx.js';
 import { parseHash, hashFor, go } from './nav.js';
 import {
-  init, subscribe, state, createDraft, dailyFor, setBody, togglePin, flush, setSetting, getNote, query, uid,
+  init, subscribe, state, createDraft, dailyFor, setBody, togglePin, flush, setSetting, getNote, query, uid, appendTaskToToday,
 } from './store.js';
 import { renderSidebar, renderList, sortMenu, collectionTitle } from './panes.js';
 import { createNotePane } from './notepane.js';
 import { openPalette, openSettings } from './overlays.js';
 import { setHandlers, reschedule } from './reminders.js';
+import { refreshWidget } from './widget.js';
 import { ymd, parseYmd, normalizeDates } from './md.js';
 import { startSync } from './sync.js';
 import * as storeAll from './store.js';
@@ -81,7 +83,7 @@ async function boot() {
   subscribe((e) => {
     if (e.type === 'ready') return;
     renderAll();
-    if (e.type === 'body' || e.type === 'notes') reschedule();
+    if (e.type === 'body' || e.type === 'notes') { reschedule(); refreshWidget(); }
   });
 
   // ——— Actions ———
@@ -161,16 +163,37 @@ async function boot() {
   });
 
   // ——— Persistance et cycle de vie ———
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); else { reschedule(); refreshWidget(300); } });
   window.addEventListener('pagehide', flush);
 
   // ——— Rappels ———
   setHandlers({
     openNote: (id) => { if (getNote(id)) ctx.openNote(id); },
+    openToday: () => ctx.openToday(),
+    notice: (t) => toast(t, { duration: 5000 }),
     fallback: (t) => toast(`Rappel : ${t.text}`, { duration: 9000, action: { label: 'Ouvrir', onClick: () => ctx.openNote(t.noteId, { line: t.line }) } }),
   });
 
   // ——— Application native (APK) ———
+  /** Dictée rapide (widget, raccourci) : une note ou, avec mode=task, une tâche dans le journal du jour. */
+  async function quickDictate(mode) {
+    if (!dictSupported()) { toast('La dictée n’est pas disponible ici.'); return; }
+    const task = mode === 'task';
+    const t = await dictateSheet({ title: task ? 'Dicter une tâche' : 'Dicter une note' });
+    if (!t) return;
+    if (task) {
+      appendTaskToToday(normalizeDates('- [ ] ' + t.replace(/\s*\n\s*/g, ' ')).replace(/^- \[ \] /, ''));
+      toast('Ajoutée au journal du jour');
+    } else {
+      const d = createDraft();
+      setBody(d.id, normalizeDates(t), 'dictation');
+      ctx.closeDrawer();
+      go({ c: 'all', arg: null, note: d.id, line: null });
+      toast('Note créée');
+    }
+  }
+  ctx.quickDictate = quickDictate;
+
   async function handleLink(url) {
     const cmd = (url || '').replace(/^[a-z]+:\/\//i, '').replace(/^\/+/, '').split(/[/?#]/)[0];
     if (cmd === 'share') {
@@ -181,6 +204,10 @@ async function boot() {
       ctx.closeDrawer();
       go({ c: 'all', arg: null, note: d.id, line: null });
       toast('Ajouté à une nouvelle note');
+    } else if (cmd === 'dictate') {
+      let mode = '';
+      try { mode = new URL(url).searchParams.get('mode') || ''; } catch {}
+      quickDictate(mode);
     } else if (cmd === 'new') ctx.newNote();
     else if (cmd === 'today') ctx.openToday();
     else if (cmd === 'tasks') ctx.openCollection({ c: 'tasks' });
@@ -196,7 +223,7 @@ async function boot() {
       if (ctx.route.c !== 'all' || ctx.query) { ctx.openCollection({ c: 'all' }); return; }
       CapApp.exitApp();
     });
-    CapApp.addListener('pause', () => flush());
+    CapApp.addListener('pause', () => { flush(); refreshWidget(0); });
     try {
       const l = await CapApp.getLaunchUrl();
       if (l?.url) launchedFromLink = true;
@@ -230,7 +257,8 @@ async function boot() {
     applyRoute();
   }
   reschedule();
-  if (window.__PLUME_TEST__) window.__plumeStore = storeAll;
+  refreshWidget(800);
+  if (window.__PLUME_TEST__) { window.__plumeStore = storeAll; window.__plumeCtx = ctx; }
   startSync().catch((e) => console.warn('sync', e));
 
   if ('serviceWorker' in navigator && !native && location.protocol.startsWith('http') && !window.__PLUME_SINGLE__) {

@@ -41,3 +41,16 @@ partage de texte vers Plume. Liens : `plume://new`, `plume://today`, `plume://ta
 2. Authentication → Emails : le modèle « Magic Link » doit contenir `{{ .Token }}`.
 3. Réglages de Plume → Synchronisation → recevoir le code par e-mail.
 Les clés publiques du projet sont dans `src/config.js`.
+
+
+## Phase 1 : rappels d'assistant (v0.3.0)
+
+- **Tâches récurrentes** : écrire `chaque vendredi 16h`, `tous les jours 7h`, `chaque mois le 5`, `en semaine 9h`… sur une ligne de tâche. Elle devient `@date heure ↻semaine`. Cocher la tâche ne la ferme pas : elle passe à la prochaine échéance.
+- **Point du matin** : une notification à l'heure choisie (Réglages > Rappels, 07:30 par défaut) avec les rendez-vous du téléphone et les tâches du jour. Rien n'est envoyé si la journée est vide. Un appui ouvre le journal du jour. Planifiée pour 7 jours, remise à jour à chaque ouverture de l'application.
+- **Boutons dans les rappels** : *Fait*, *Dans 1 h*, *Demain*. Android ouvre brièvement l'application pour appliquer l'action, puis la referme.
+
+## Widget Agenda et dictée vocale (v0.4.0, APK)
+
+- **Widget « Plume Agenda »** (ajout depuis la liste des widgets de l'écran d'accueil) : date du jour, rendez-vous du téléphone et tâches du jour (en retard en rouge), boutons *Dicter* et *+ Note*. L'application dépose un instantané de 7 jours à chaque modification et quand vous la quittez ; le widget se redessine aussi toutes les 30 minutes. Les rendez-vous ajoutés directement dans votre calendrier apparaissent après la prochaine ouverture de Plume.
+- **Dictée** : bouton « Dicter du texte » dans la barre d'outils d'une note (le texte est inséré au curseur), micro dans la saisie rapide de Tâches, lien `plume://dictate` (nouvelle note) et `plume://dictate?mode=task` (tâche dans le journal du jour, dates et heures comprises : « appeler Marc demain à 14h »). Raccourci d'icône « Dicter » (appui long). Ponctuation à voix haute : *virgule*, *point final*, *point d'interrogation*, *à la ligne*…
+- Code natif : `native/java/PlumeNativePlugin.java` (dictée via SpeechRecognizer d'Android, instantané du widget) et `AgendaWidget.java`, installés par `scripts/prepare-android.mjs`.

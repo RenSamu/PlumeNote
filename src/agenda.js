@@ -1,5 +1,5 @@
 // Bloc « Agenda » affiché en haut des notes du jour : rendez-vous du téléphone, tâches à faire, semaine à venir.
-import { h } from './ui.js';
+import { h, toast } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
 import { state, allTasks, toggleTaskLine, setSetting, subscribe } from './store.js';
@@ -51,10 +51,10 @@ export function createAgenda() {
 
   const taskItem = (t) => h('div', { class: 'ag-row ag-task' },
     h('button', { class: 'check', type: 'button', role: 'checkbox', 'aria-checked': 'false', 'aria-label': 'Terminer la tâche',
-      onclick: () => { toggleTaskLine(t.noteId, t.line); } }),
+      onclick: () => { const r = toggleTaskLine(t.noteId, t.line); if (r) toast(`Prochaine fois : ${dueLabel({ date: r.next, time: r.time })}`); } }),
     h('button', { class: 'ag-main', type: 'button', onclick: () => ctx.openNote(t.noteId, { line: t.line }) },
       h('span', { class: 'ag-title' }, t.text || 'Tâche sans titre', h('span', { class: 'ag-sub' }, t.noteTitle || 'Note sans titre')),
-      h('span', { class: 'chip chip-' + (dueState(t.due, false) || 'plain') }, dueLabel(t.due))));
+      h('span', { class: 'chip chip-' + (dueState(t.due, false) || 'plain') }, (t.rec ? '↻ ' : '') + dueLabel(t.due))));
 
   function block(label, count, ...rows) {
     return h('div', { class: 'ag-block' }, h('div', { class: 'ag-label' }, label, count != null ? h('span', { class: 'ag-n' }, String(count)) : null), ...rows);
