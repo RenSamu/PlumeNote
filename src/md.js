@@ -40,8 +40,38 @@ const TASK_RE = /^(\s*)[-*+] \[( |x|X)\] ?(.*)$/;
 const FENCE_RE = /^\s*(```|~~~)/;
 const DUE_RE = /@(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}:\d{2}))?/;
 
+// ——— Liens entre notes : [[Titre]] ou [[Titre|texte affiché]] ———
+export const WIKI_SRC = '\\[\\[([^\\[\\]\\n|]{1,80})(?:\\|([^\\[\\]\\n]{1,80}))?\\]\\]';
+
+/** Clé de comparaison d'un titre : sans accents, minuscules, espaces simples. */
+export function normKey(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Liens [[…]] d'une ligne : [{ from, to, title, label }]. */
+export function wikiSpans(text) {
+  const re = new RegExp(WIKI_SRC, 'g');
+  const out = [];
+  let m;
+  while ((m = re.exec(text))) out.push({ from: m.index, to: m.index + m[0].length, title: m[1].trim(), label: (m[2] || m[1]).trim() });
+  return out;
+}
+
+/** Clés des titres liés dans un texte (hors blocs de code). */
+export function extractLinks(body) {
+  const keys = new Set();
+  let fence = false;
+  for (const raw of body.split('\n')) {
+    if (FENCE_RE.test(raw)) { fence = !fence; continue; }
+    if (fence || !raw.includes('[[')) continue;
+    for (const w of wikiSpans(raw.replace(/`[^`]*`/g, (m) => ' '.repeat(m.length)))) keys.add(normKey(w.title));
+  }
+  return [...keys];
+}
+
 export function stripInline(s) {
   return s
+    .replace(new RegExp(WIKI_SRC, 'g'), (m, t, a) => (a || t))
     .replace(/!\[[^\]]*\]\(att:[^)]*\)/g, '')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -114,7 +144,7 @@ export function parseTasks(body) {
     const dm = DUE_RE.exec(raw);
     const due = dm ? { date: dm[1], time: dm[2] ? dm[2].padStart(5, '0') : null } : null;
     const rec = parseRec(raw);
-    const text = stripRec(raw.replace(new RegExp(DUE_RE.source, 'g'), '')).replace(/\s{2,}/g, ' ').trim();
+    const text = stripRec(raw.replace(new RegExp(DUE_RE.source, 'g'), '')).replace(new RegExp(WIKI_SRC, 'g'), (mm, t, a) => (a || t)).replace(/\s{2,}/g, ' ').trim();
     tasks.push({ line: i, done: m[2] !== ' ', text, due, rec, raw });
   }
   return tasks;
@@ -372,6 +402,11 @@ export function setDueOnLine(line, dateStr, timeStr) {
   return `${line.trimEnd()} ${tok}`;
 }
 
+/** Retire l'échéance (@date heure) d'une ligne de tâche. */
+export function clearDueOnLine(line) {
+  return line.replace(new RegExp('\\s*' + DUE_RE.source, 'g'), '').replace(/\s*📅/g, '');
+}
+
 /** Tâche récurrente cochée : la ligne reste ouverte et passe à la prochaine échéance. Retourne null si la ligne n'est pas récurrente. */
 export function advanceLine(line, now = new Date()) {
   if (!TASK_RE.test(line)) return null;
@@ -417,4 +452,56 @@ export function humanSize(n) {
 export function fmtDuration(sec) {
   sec = Math.max(0, Math.round(sec || 0));
   return `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
+}
+
+// ——— Propriétés « clé:: valeur » (collections) ———
+const PROP_RE = /^([\p{L}][\p{L}\p{N} _-]{0,24})::[ \t]*(.*)$/u;
+
+export function parseProps(body) {
+  const props = {};
+  let fence = false;
+  for (const raw of String(body).split('\n')) {
+    if (FENCE_RE.test(raw)) { fence = !fence; continue; }
+    if (fence) continue;
+    const m = PROP_RE.exec(raw.trim());
+    if (!m) continue;
+    const k = m[1].trim().toLowerCase();
+    const v = m[2].trim();
+    if (!(k in props)) props[k] = v;
+  }
+  return props;
+}
+export const isPropLine = (text) => PROP_RE.test(text.trim());
+
+// ——— Durées « ⏱ 1h30 » (temps passé) ———
+const DUR_RE = /⏱\s*(?:(\d{1,2})\s*h\s*(\d{1,2})?|(\d+(?:[.,]\d+)?)\s*h(?![a-zà-ÿ])|(\d{1,3})\s*(?:min|mn|m)(?![a-zà-ÿ]))/giu;
+
+/** Durées d'un texte, en minutes : [{ minutes, index }]. */
+export function parseDurations(body) {
+  const out = [];
+  let fence = false;
+  let offset = 0;
+  for (const raw of String(body).split('\n')) {
+    if (FENCE_RE.test(raw)) fence = !fence;
+    else if (!fence && raw.includes('⏱')) {
+      DUR_RE.lastIndex = 0;
+      let m;
+      while ((m = DUR_RE.exec(raw))) {
+        let minutes;
+        if (m[1] !== undefined) minutes = (+m[1]) * 60 + (m[2] ? +m[2] : 0);
+        else if (m[3] !== undefined) minutes = Math.round(parseFloat(m[3].replace(',', '.')) * 60);
+        else minutes = +m[4];
+        out.push({ minutes, index: offset + m.index });
+      }
+    }
+    offset += raw.length + 1;
+  }
+  return out;
+}
+
+export function fmtMinutes(min) {
+  const m = Math.round(min);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h} h ${String(r).padStart(2, '0')}` : `${h} h`;
 }

@@ -1,5 +1,9 @@
 // Barre latérale, liste des notes, vue des tâches.
 import { dictateSheet, supported as dictSupported } from './dictate-ui.js';
+import { openTriage } from './inbox.js';
+import { renderHabits, pendingToday } from './habits.js';
+import { renderTime } from './time.js';
+import { openContactPicker, contactsSupported } from './people.js';
 import { h } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
@@ -44,6 +48,12 @@ export function renderSidebar(el) {
         active: r.c === 'tasks', count: ts.overdue || ts.open, accent: ts.overdue > 0,
         onClick: nav(() => ctx.openCollection({ c: 'tasks' })),
       }),
+      sbItem('habit', 'Habitudes', { active: r.c === 'habits', count: pendingToday().length, accent: false, onClick: nav(() => ctx.openCollection({ c: 'habits' })) }),
+      sbItem('inbox', 'Boîte de réception', { active: r.c === 'inbox', count: c.inbox, accent: c.inbox > 0, onClick: nav(() => ctx.openCollection({ c: 'inbox' })) }),
+      sbItem('people', 'Personnes', { active: r.c === 'people', count: c.people, onClick: nav(() => ctx.openCollection({ c: 'people' })) }),
+      sbItem('clock', 'Temps passé', { active: r.c === 'time', onClick: nav(() => ctx.openCollection({ c: 'time' })) }),
+      sbItem('file', 'Modèles', { onClick: nav(() => ctx.openTemplates()) }),
+      sbItem('review', 'Revue de la semaine', { onClick: nav(() => ctx.openReview()) }),
       h('div', { class: 'sb-section' },
         h('span', {}, 'Dossiers'),
         h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Nouveau dossier', onclick: async () => {
@@ -84,6 +94,10 @@ export function collectionTitle(r = ctx.route) {
     case 'journal': return 'Journal';
     case 'tasks': return 'Tâches';
     case 'trash': return 'Corbeille';
+    case 'inbox': return 'Boîte de réception';
+    case 'people': return 'Personnes';
+    case 'habits': return 'Habitudes';
+    case 'time': return 'Temps passé';
     case 'folder': return state.folders.get(r.arg)?.name || 'Dossier';
     case 'tag': return `#${r.arg}`;
     default: return 'Notes';
@@ -99,11 +113,23 @@ function bucket(ts, now) {
   return 'Plus ancien';
 }
 
+/** Propriétés « clé:: valeur » affichées en pastilles : statut, note (★), puis une autre. */
+function propChips(n) {
+  const p = n.props || {};
+  const out = [];
+  if (p.statut) out.push(h('span', { class: 'row-prop st' }, p.statut));
+  if (p.note && /^\d+(?:[.,]\d+)?$/.test(p.note)) out.push(h('span', { class: 'row-prop' }, '★ ' + p.note));
+  const other = Object.keys(p).find((k) => k !== 'statut' && k !== 'note' && p[k]);
+  if (other) out.push(h('span', { class: 'row-prop' }, p[other]));
+  return out;
+}
+
 function noteRow(n, active) {
   const folder = n.folderId ? state.folders.get(n.folderId) : null;
   const showFolder = folder && ctx.route.c !== 'folder';
   const meta = [];
   if (showFolder) meta.push(h('span', { class: 'row-chip' }, h('span', { html: icon('folder', 12) }), folder.name));
+  propChips(n).forEach((c) => meta.push(c));
   n.tags.slice(0, 3).forEach((t) => meta.push(h('span', { class: 'row-tag' }, '#' + t)));
   const open = ctx.route.c === 'trash' ? n.deletedAt : n.updatedAt;
   const row = h('div', { class: 'row' + (active ? ' active' : '') + (n.deletedAt ? ' trashed' : '') },
@@ -135,19 +161,39 @@ export function renderList(els) {
   const { title, count, extra, body, search, sort, fab } = els;
   title.textContent = collectionTitle();
   const isTasks = r.c === 'tasks';
-  search.parentElement.hidden = isTasks;
-  fab.hidden = r.c === 'trash' || isTasks;
-  sort.hidden = isTasks || r.c === 'journal' || r.c === 'trash';
+  const isHabits = r.c === 'habits';
+  const isTime = r.c === 'time';
+  search.parentElement.hidden = isTasks || isHabits || isTime;
+  fab.hidden = r.c === 'trash' || r.c === 'inbox' || isTasks || isHabits || isTime;
+  sort.hidden = isTasks || isHabits || isTime || r.c === 'journal' || r.c === 'trash';
+  if (isHabits) { renderHabits(extra, body, count); return; }
+  if (isTime) { renderTime(extra, body, count); return; }
 
   if (isTasks) { count.textContent = ''; renderTasks(extra, body, count); return; }
 
   const view = r.c === 'folder' ? 'folder' : r.c === 'tag' ? 'tag' : r.c;
   let list = query({ view, folderId: r.arg, tag: r.arg, text: ctx.query });
+  const statuts = r.c === 'tag' ? [...new Set(list.map((n) => n.props?.statut).filter(Boolean))] : [];
+  if (statuts.length >= 2 && ctx.statut && statuts.includes(ctx.statut)) list = list.filter((n) => n.props?.statut === ctx.statut);
   count.textContent = list.length ? `${list.length}` : '';
 
   // Bandeau d'en-tête spécifique
   extra.replaceChildren();
   if (r.c === 'journal') extra.appendChild(weekStrip());
+  if (statuts.length >= 2) {
+    extra.appendChild(h('div', { class: 'status-bar', role: 'group', 'aria-label': 'Filtrer par statut' },
+      ...['', ...statuts].map((v) => h('button', { class: 'chip-btn' + ((ctx.statut || '') === v ? ' on' : ''), type: 'button', onclick: () => { ctx.statut = v; ctx.refreshList(); } }, v || 'Tous'))));
+  }
+  if (r.c === 'inbox' && list.length) {
+    extra.appendChild(h('div', { class: 'trash-bar inbox-bar' },
+      h('span', {}, `${list.length} à trier`),
+      h('button', { class: 'btn btn-primary sm', type: 'button', onclick: () => openTriage() }, 'Trier')));
+  }
+  if (r.c === 'people' && contactsSupported()) {
+    extra.appendChild(h('div', { class: 'trash-bar inbox-bar' },
+      h('span', {}, 'Vos contacts du téléphone'),
+      h('button', { class: 'btn btn-quiet sm', type: 'button', onclick: () => openContactPicker() }, 'Importer…')));
+  }
   if (r.c === 'trash' && list.length) {
     extra.appendChild(h('div', { class: 'trash-bar' },
       h('span', {}, 'Effacées automatiquement après 30 jours.'),
@@ -159,6 +205,8 @@ export function renderList(els) {
   body.replaceChildren();
   if (!list.length) {
     if (ctx.query) body.appendChild(emptyState({ title: 'Aucun résultat', text: `Rien ne correspond à « ${ctx.query} ».` }));
+    else if (r.c === 'inbox') body.appendChild(emptyState({ title: 'Boîte de réception vide', text: 'Partagez un lien, un texte ou une capture vers Plume depuis une autre application : tout arrive ici, prêt à trier.' }));
+    else if (r.c === 'people') body.appendChild(emptyState({ title: 'Aucune fiche de personne', text: 'Une fiche par personne : coordonnées, notes, et tout ce qui la mentionne avec [[son nom]].', action: { label: 'Nouvelle fiche', onClick: () => ctx.newPerson() } }));
     else if (r.c === 'trash') body.appendChild(emptyState({ title: 'La corbeille est vide', text: 'Les notes supprimées restent ici 30 jours.' }));
     else if (r.c === 'journal') body.appendChild(emptyState({ title: 'Pas encore de journal', text: 'Une note par jour, créée au moment où vous l\'ouvrez.', action: { label: "Ouvrir aujourd'hui", onClick: () => ctx.openToday() } }));
     else if (r.c === 'tag') body.appendChild(emptyState({ title: `Aucune note avec #${r.arg}`, text: 'Tapez #' + r.arg + ' dans une note pour la retrouver ici.' }));

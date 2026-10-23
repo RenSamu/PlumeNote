@@ -14,6 +14,10 @@ import { createNotePane } from './notepane.js';
 import { openPalette, openSettings } from './overlays.js';
 import { setHandlers, reschedule } from './reminders.js';
 import { refreshWidget } from './widget.js';
+import { captureToInbox, openTriage } from './inbox.js';
+import { newPerson } from './people.js';
+import { openReview } from './review.js';
+import { openTemplatePicker } from './templates.js';
 import { ymd, parseYmd, normalizeDates } from './md.js';
 import { startSync } from './sync.js';
 import * as storeAll from './store.js';
@@ -89,7 +93,7 @@ async function boot() {
   // ——— Actions ———
   const baseRoute = () => {
     const c = ctx.route.c;
-    return c === 'tasks' || c === 'trash' || c === 'journal' ? { c: 'all', arg: null } : { c, arg: ctx.route.arg };
+    return c === 'tasks' || c === 'trash' || c === 'journal' || c === 'inbox' || c === 'people' || c === 'habits' || c === 'time' ? { c: 'all', arg: null } : { c, arg: ctx.route.arg };
   };
   ctx.openNote = (id, { line = null } = {}) => go({ ...ctx.route, note: id, line });
   ctx.closeNote = ({ replace = false } = {}) => {
@@ -98,6 +102,7 @@ async function boot() {
     else go({ ...ctx.route, note: null, line: null }, { replace: true });
   };
   ctx.newNote = () => {
+    if (ctx.route.c === 'people' && !ctx.route.note) { ctx.newPerson(); return; }
     const base = baseRoute();
     const d = createDraft({ folderId: base.c === 'folder' ? base.arg : null });
     ctx.closeDrawer();
@@ -112,6 +117,9 @@ async function boot() {
     go({ c: 'journal', arg: null, note: n.id, line: null }, { replace });
   };
   ctx.openCollection = (r, { replace = false } = {}) => go({ c: r.c, arg: r.arg || null, note: null, line: null }, { replace });
+  ctx.newPerson = () => newPerson();
+  ctx.openReview = () => openReview();
+  ctx.openTemplates = () => openTemplatePicker();
   ctx.openPalette = openPalette;
   ctx.openSettings = openSettings;
   ctx.openDrawer = () => { shell.dataset.drawer = 'open'; };
@@ -125,7 +133,7 @@ async function boot() {
     ctx.route = r;
     const key = `${r.c}/${r.arg || ''}`;
     if (key !== lastKey) {
-      lastKey = key; ctx.query = ''; searchInput.value = ''; ctx.limit = 200; ctx.showDone = false;
+      lastKey = key; ctx.query = ''; searchInput.value = ''; ctx.limit = 200; ctx.showDone = false; ctx.statut = '';
       listEls.extra.replaceChildren();
     }
     ctx.closeDrawer();
@@ -170,6 +178,7 @@ async function boot() {
   setHandlers({
     openNote: (id) => { if (getNote(id)) ctx.openNote(id); },
     openToday: () => ctx.openToday(),
+    openReview: () => ctx.openReview(),
     notice: (t) => toast(t, { duration: 5000 }),
     fallback: (t) => toast(`Rappel : ${t.text}`, { duration: 9000, action: { label: 'Ouvrir', onClick: () => ctx.openNote(t.noteId, { line: t.line }) } }),
   });
@@ -193,17 +202,18 @@ async function boot() {
     }
   }
   ctx.quickDictate = quickDictate;
+  ctx.handleLink = (u) => handleLink(u);
 
   async function handleLink(url) {
     const cmd = (url || '').replace(/^[a-z]+:\/\//i, '').replace(/^\/+/, '').split(/[/?#]/)[0];
     if (cmd === 'share') {
       let text = '';
       try { text = new URL(url).searchParams.get('text') || ''; } catch {}
-      const d = createDraft();
-      if (text) setBody(d.id, text, 'share');
+      if (!text.trim()) { ctx.newNote(); return; }
+      captureToInbox(text);
       ctx.closeDrawer();
-      go({ c: 'all', arg: null, note: d.id, line: null });
-      toast('Ajouté à une nouvelle note');
+      go({ c: 'inbox', arg: null, note: null, line: null });
+      toast('Ajouté à la boîte de réception', { action: { label: 'Trier', onClick: () => openTriage() } });
     } else if (cmd === 'dictate') {
       let mode = '';
       try { mode = new URL(url).searchParams.get('mode') || ''; } catch {}
@@ -211,6 +221,8 @@ async function boot() {
     } else if (cmd === 'new') ctx.newNote();
     else if (cmd === 'today') ctx.openToday();
     else if (cmd === 'tasks') ctx.openCollection({ c: 'tasks' });
+    else if (cmd === 'inbox') ctx.openCollection({ c: 'inbox' });
+    else if (cmd === 'review') ctx.openReview();
   }
   let launchedFromLink = false;
   if (native) {

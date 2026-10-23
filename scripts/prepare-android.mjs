@@ -95,6 +95,10 @@ $1`);
         </receiver>
     $1`);
   }
+  if (!t.includes('android.permission.READ_CONTACTS')) {
+    t = t.replace(/(<\/manifest>)/, `    <uses-permission android:name="android.permission.READ_CONTACTS" />
+$1`);
+  }
   if (!t.includes('android.speech.RecognitionService')) {
     // Android 11+ : sans cette déclaration, la reconnaissance vocale est invisible pour l'application.
     t = t.replace(/(<\/manifest>)/, `    <queries>

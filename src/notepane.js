@@ -1,18 +1,24 @@
 // Panneau d'édition d'une note.
 import { dictateSheet, supported as dictSupported } from './dictate-ui.js';
-import { h, openMenu, toast, lightbox, confirmDialog, promptDialog } from './ui.js';
+import { h, openMenu, toast, lightbox, confirmDialog, promptDialog, hasLayer } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
 import { createEditor, hooks } from './editor.js';
 import {
   state, getNote, setBody, togglePin, moveToFolder, trashNote, restoreNote, deleteForever, discardIfEmpty,
   foldersList, createFolder, addAttachment, attachmentUrl, openTasksBefore, flush, subscribe,
+  resolveTitle, backlinks, linkSuggestions, createNoteTitled, setKind, saveVersion,
 } from './store.js';
 import { prepareImage, pickFiles, startRecording, recorderSupported, openAttachment, saveTextFile } from './files.js';
 import { openDatePicker } from './overlays.js';
 import { reschedule, requestPermission, permissionState } from './reminders.js';
-import { countWords, fmtDuration, ymd, longDay, parseYmd, calendarCandidates, CAL_MARK } from './md.js';
+import { countWords, plainText, stripInline, fmtDuration, ymd, longDay, parseYmd, calendarCandidates, CAL_MARK } from './md.js';
 import { createAgenda } from './agenda.js';
+import { createPersonCard } from './people.js';
+import { openTriage } from './inbox.js';
+import { openVersions } from './versions.js';
+import { saveAsTemplate } from './templates.js';
+import { lineSyllables } from './poetry.js';
 import * as cal from './calendar.js';
 
 const dismissedCarry = new Set();
@@ -26,22 +32,69 @@ export function createNotePane(root) {
   const bar = h('header', { class: 'np-bar' }, backBtn, folderBtn, h('span', { class: 'spacer' }), status, pinBtn, moreBtn);
   const banner = h('div', { class: 'np-banner-wrap' });
   const agenda = createAgenda();
+  const personCard = createPersonCard();
   const host = h('div', { class: 'editor-host' });
+  const links = h('div', { class: 'np-links', hidden: true });
   const toolbar = h('div', { class: 'np-toolbar', role: 'toolbar', 'aria-label': 'Mise en forme' });
   const empty = h('div', { class: 'np-empty' },
     h('div', { class: 'empty-ill', html: icon('nib', 44) }),
     h('p', {}, 'Choisissez une note, ou écrivez-en une nouvelle.'),
     h('button', { class: 'btn btn-primary', type: 'button', onclick: () => ctx.newNote() }, 'Nouvelle note'));
-  const inner = h('div', { class: 'np-inner' }, bar, banner, agenda.el, host, toolbar);
-  root.append(inner, empty);
+  const focusCount = h('span', { class: 'fb-count' });
+  const sylBtn = h('button', { class: 'btn sm fb-syl', type: 'button', 'aria-pressed': 'false', onclick: () => { editor.setSyllables(!editor.syllables); updateFocusBar(); } }, 'Syllabes');
+  const focusBar = h('div', { class: 'focus-bar', hidden: true },
+    h('button', { class: 'btn sm', type: 'button', onclick: () => exitFocus() }, 'Quitter'),
+    focusCount, h('span', { class: 'spacer' }), sylBtn,
+    h('button', { class: 'btn sm', type: 'button', onclick: async () => { if (current) { await saveVersion(current.id, 'Version enregistrée'); toast('Version enregistrée'); } } }, 'Enregistrer une version'),
+    h('button', { class: 'btn sm', type: 'button', onclick: () => current && openVersions(current.id, { onRestore: (n) => editor.replaceExternal(n.body) }) }, 'Versions'));
+  const inner = h('div', { class: 'np-inner' }, bar, banner, personCard.el, agenda.el, host, links, toolbar);
+  root.append(inner, empty, focusBar);
 
   let current = null;
   let statusTimer = null;
+  let focusing = false;
+
+  function updateFocusBar() {
+    if (!current) return;
+    const lines = current.body.split('\n').filter((l) => l.trim());
+    const verses = Math.max(0, lines.length - 1);
+    focusCount.textContent = `${verses} ligne${verses > 1 ? 's' : ''} · ${countWords(current.body)} mots`;
+    sylBtn.setAttribute('aria-pressed', String(editor.syllables));
+    sylBtn.classList.toggle('btn-primary', editor.syllables);
+  }
+  function enterFocus() {
+    if (!current || current.deletedAt) return;
+    focusing = true;
+    root.classList.add('focus');
+    focusBar.hidden = false;
+    editor.setSyllables(current.tags.includes('poème') || current.tags.includes('poeme'));
+    updateFocusBar();
+    editor.focus(true);
+  }
+  function exitFocus() {
+    if (!focusing) return;
+    focusing = false;
+    root.classList.remove('focus');
+    focusBar.hidden = true;
+    editor.setSyllables(false);
+    if (current) saveVersion(current.id, 'Fin de séance');
+  }
+  document.addEventListener('keydown', (e) => { if (focusing && e.key === 'Escape' && !hasLayer()) { e.preventDefault(); exitFocus(); } });
 
   // Pièces jointes : points d'accès pour l'éditeur
   hooks.meta = (id) => state.atts.get(id) || null;
   hooks.url = (id) => attachmentUrl(id);
   hooks.notice = (t) => toast(t);
+  hooks.linkExists = (t) => !!resolveTitle(t);
+  hooks.suggest = (t) => linkSuggestions(t, { except: current?.id }).map((n) => n.title);
+  hooks.openLink = (t) => {
+    const found = resolveTitle(t, { except: current?.id });
+    if (found) { ctx.openNote(found.id); return; }
+    if (resolveTitle(t)) return; // la note liée est la note courante
+    const d = createNoteTitled(t.trim());
+    toast(`Note « ${t.trim()} » créée`);
+    ctx.openNote(d.id);
+  };
   hooks.open = (m) => openAttachment(m).catch((e) => toast(e.message || 'Impossible d\'ouvrir ce fichier.'));
   hooks.lightbox = async (m) => {
     const u = await attachmentUrl(m.id);
@@ -53,6 +106,7 @@ export function createNotePane(root) {
       if (!current) return;
       setBody(current.id, text, 'editor');
       flashStatus();
+      if (focusing) updateFocusBar();
       reschedule();
       proposeEventsSoon();
       if (current.kind === 'daily') renderBanner();
@@ -250,6 +304,11 @@ export function createNotePane(root) {
       { label: 'Déplacer vers…', icon: 'folder', onClick: () => moveMenu(folderBtn) },
       { label: 'Copier le texte', icon: 'copy', onClick: async () => { try { await navigator.clipboard.writeText(noteAsMarkdown()); toast('Texte copié'); } catch { toast('Copie impossible ici.'); } } },
       { label: 'Exporter en Markdown', icon: 'download', onClick: () => saveTextFile(((n.title || 'note').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'note') + '.md', noteAsMarkdown()) },
+      { label: 'Copier en texte brut', icon: 'copy', onClick: async () => { try { await navigator.clipboard.writeText(plainText(n.body).replace(/\n{3,}/g, '\n\n').trim()); toast('Texte brut copié'); } catch { toast('Copie impossible ici.'); } } },
+      { separator: true },
+      { label: 'Mode écriture', icon: 'nib', onClick: () => enterFocus() },
+      { label: 'Versions', icon: 'restore', onClick: () => openVersions(n.id, { onRestore: (m) => editor.replaceExternal(m.body) }) },
+      ...(n.kind === 'note' || n.kind === 'daily' ? [{ label: 'Enregistrer comme modèle', icon: 'file', onClick: () => saveAsTemplate(n) }] : []),
       { separator: true },
       { label: 'Mettre à la corbeille', icon: 'trash', danger: true, onClick: () => removeCurrent() },
     ]);
@@ -279,6 +338,14 @@ export function createNotePane(root) {
         } }, 'Supprimer')));
       return;
     }
+    if (n.kind === 'inbox') {
+      banner.appendChild(h('div', { class: 'np-banner' },
+        h('span', { html: icon('inbox', 18) }),
+        h('span', {}, 'Dans la boîte de réception'),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn btn-quiet sm', type: 'button', onclick: () => openTriage() }, 'Trier'),
+        h('button', { class: 'btn btn-primary sm', type: 'button', onclick: () => { setKind(n.id, 'note'); toast('Gardée dans Notes'); } }, 'Garder')));
+    }
     if (n.kind === 'daily' && n.date === ymd(new Date()) && !dismissedCarry.has(n.id)) {
       const carry = openTasksBefore(n.date);
       if (carry) {
@@ -303,11 +370,34 @@ export function createNotePane(root) {
     }
   }
 
+  let linksOpen = true;
+  function renderLinks() {
+    links.replaceChildren();
+    if (!current || current.deletedAt) { links.hidden = true; return; }
+    const bl = backlinks(current.id);
+    links.hidden = bl.length === 0;
+    if (!bl.length) return;
+    links.appendChild(h('button', { class: 'np-links-head', type: 'button', 'aria-expanded': String(linksOpen), onclick: () => { linksOpen = !linksOpen; renderLinks(); } },
+      h('span', { html: icon(linksOpen ? 'down' : 'chevron', 14) }),
+      h('span', {}, `Mentionnée dans ${bl.length} note${bl.length > 1 ? 's' : ''}`)));
+    if (!linksOpen) return;
+    for (const { note, line } of bl.slice(0, 20)) {
+      links.appendChild(h('button', { class: 'np-link', type: 'button', onclick: () => ctx.openNote(note.id) },
+        h('span', { class: 'np-link-title' }, note.title || 'Note vide'),
+        line ? h('span', { class: 'np-link-line' }, line) : null));
+    }
+  }
+  let linksTimer = null;
+  const renderLinksSoon = () => { clearTimeout(linksTimer); linksTimer = setTimeout(renderLinks, 250); };
+
   function renderBar() {
     if (!current) return;
     const f = current.folderId ? state.folders.get(current.folderId) : null;
-    folderBtn.replaceChildren(h('span', { html: icon(current.kind === 'daily' ? 'sun' : 'folder', 15) }), h('span', {}, current.kind === 'daily' ? 'Journal' : f ? f.name : 'Notes'), h('span', { html: icon('down', 14) }));
-    folderBtn.disabled = current.kind === 'daily' || !!current.deletedAt;
+    const k = current.kind;
+    const fixed = k === 'daily' || k === 'inbox' || k === 'person' || k === 'habit' || k === 'template';
+    const [fic, flabel] = k === 'daily' ? ['sun', 'Journal'] : k === 'inbox' ? ['inbox', 'Boîte de réception'] : k === 'person' ? ['people', 'Personne'] : k === 'habit' ? ['habit', 'Habitude'] : k === 'template' ? ['file', 'Modèle'] : ['folder', f ? f.name : 'Notes'];
+    folderBtn.replaceChildren(...[h('span', { html: icon(fic, 15) }), h('span', {}, flabel), fixed ? null : h('span', { html: icon('down', 14) })].filter(Boolean));
+    folderBtn.disabled = fixed || !!current.deletedAt;
     pinBtn.innerHTML = icon('pin', 20);
     pinBtn.classList.toggle('active', !!current.pinned);
     pinBtn.setAttribute('aria-pressed', String(!!current.pinned));
@@ -331,15 +421,18 @@ export function createNotePane(root) {
       else if (line != null) editor.focusLine(line);
     } else if (line != null) editor.focusLine(line);
     status.classList.remove('on');
-    renderBar(); renderBanner();
+    renderBar(); renderBanner(); renderLinks();
     agenda.show(n);
+    personCard.show(n);
     return true;
   }
 
   function leave() {
     if (!current) return;
+    exitFocus();
     clearTimeout(proposeTimer);
     agenda.hide();
+    personCard.hide();
     if (!current.deletedAt) editor.normalize();
     flush();
     discardIfEmpty(current.id);
@@ -351,6 +444,7 @@ export function createNotePane(root) {
 
   subscribe((e) => {
     if (!current) return;
+    if (e.type === 'body' || e.type === 'notes') renderLinksSoon();
     if (e.type === 'body' && e.id === current.id && e.source !== 'editor') editor.replaceExternal(current.body);
     if (e.type === 'notes' || e.type === 'folders') {
       const n = getNote(current.id);

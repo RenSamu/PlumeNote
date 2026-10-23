@@ -3,6 +3,7 @@ export const ctx = {
   route: { c: 'all', arg: null, note: null, line: null },
   query: '',
   showDone: false,
+  statut: '',
   limit: 200,
   // actions (assignées au démarrage)
   openNote: () => {},
@@ -11,6 +12,9 @@ export const ctx = {
   openToday: () => {},
   openDay: () => {},
   openCollection: () => {},
+  newPerson: () => {},
+  openReview: () => {},
+  openTemplates: () => {},
   openPalette: () => {},
   openSettings: () => {},
   openDrawer: () => {},

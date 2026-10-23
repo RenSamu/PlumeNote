@@ -5,7 +5,9 @@ import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language';
 import { icon } from './icons.js';
-import { normalizeDates, maybeDated, advanceLine, dueLabel, recSpans, parseTasks, dueState, fmtDuration, humanSize } from './md.js';
+import { autocompletion } from '@codemirror/autocomplete';
+import { lineSyllables } from './poetry.js';
+import { stripInline, normalizeDates, maybeDated, advanceLine, dueLabel, recSpans, wikiSpans, isPropLine, parseTasks, dueState, fmtDuration, humanSize } from './md.js';
 
 // Points d'accès fournis par l'application (pièces jointes, aperçu image…)
 export const hooks = {
@@ -14,7 +16,20 @@ export const hooks = {
   open: () => {},
   lightbox: () => {},
   notice: () => {},
+  linkExists: () => true,   // (titre) → la note liée existe-t-elle ?
+  openLink: () => {},       // (titre) → ouvre ou crée la note liée
+  suggest: () => [],        // (texte) → titres proposés pour [[…]]
 };
+
+// Compteur de syllabes (mode écriture) : activé à la demande, conservé quand on change de note.
+let sylOn = false;
+const setSyl = StateEffect.define();
+class SylWidget extends WidgetType {
+  constructor(n) { super(); this.n = n; }
+  eq(o) { return o.n === this.n; }
+  toDOM() { const s = document.createElement('span'); s.className = 'cm-syl'; s.textContent = '≈' + this.n; s.setAttribute('aria-hidden', 'true'); return s; }
+  ignoreEvent() { return true; }
+}
 
 const external = Annotation.define();
 const setFocus = StateEffect.define();
@@ -292,6 +307,20 @@ function build(state) {
   const inCode = (pos) => code.some(([a, b]) => pos >= a && pos <= b);
   for (let i = 1; i <= doc.lines; i++) {
     const l = doc.line(i);
+    if (l.text.includes('::') && !inCode(l.from) && isPropLine(l.text)) {
+      const k = l.text.indexOf('::');
+      put(l.from, l.from + k + 2, mark('cm-prop-key'));
+    }
+    if (l.text.includes('[[') && !inCode(l.from)) {
+      for (const w of wikiSpans(l.text)) {
+        const a = l.from + w.from, b = l.from + w.to;
+        if (inCode(a)) continue;
+        const ok = hooks.linkExists(w.title);
+        put(a, a + 2, mark('cm-wiki-br'));
+        put(a + 2, b - 2, mark('cm-wiki' + (ok ? '' : ' cm-wiki-new'), { 'data-wiki': w.title }));
+        put(b - 2, b, mark('cm-wiki-br'));
+      }
+    }
     if (!l.text.includes('#') && !l.text.includes('@') && !l.text.includes('↻')) continue;
     if (inCode(l.from)) continue;
     let m;
@@ -315,13 +344,25 @@ function build(state) {
     }
   }
 
+  if (sylOn) {
+    let titleSeen = false;
+    for (let i = 1; i <= doc.lines; i++) {
+      const l = doc.line(i);
+      if (!l.text.trim()) continue;
+      if (!titleSeen) { titleSeen = true; continue; } // la première ligne est le titre
+      if (inCode(l.from) || /^\s*(#{1,6}\s|#[\p{L}])/u.test(l.text) || isPropLine(l.text)) continue;
+      const n = lineSyllables(stripInline(l.text));
+      if (n) put(l.to, l.to, Decoration.widget({ widget: new SylWidget(n), side: 1 }));
+    }
+  }
+
   return { all: Decoration.set(all, true), atomic: Decoration.set(atomic, true) };
 }
 
 const livePreview = StateField.define({
   create: (state) => build(state),
   update(value, tr) {
-    if (tr.docChanged || tr.selection || tr.effects.some((e) => e.is(setFocus)) || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+    if (tr.docChanged || tr.selection || tr.effects.some((e) => e.is(setFocus) || e.is(setSyl)) || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
       return build(tr.state);
     }
     return value;
@@ -471,6 +512,31 @@ export function normalizeLine(view) {
 
 // ——— Création ———
 
+/** Complétion des liens : tape [[ puis quelques lettres du titre. */
+function wikiCompletion(context) {
+  const m = context.matchBefore(/\[\[[^\[\]\n|]*/);
+  if (!m) return null;
+  const typed = m.text.slice(2);
+  const from = m.from + 2;
+  const after = context.state.doc.sliceString(context.pos, context.pos + 2);
+  const close = after === ']]' ? '' : ']]';
+  const titles = hooks.suggest(typed);
+  const options = titles.map((t) => ({ label: t, type: 'note', apply: (view, c, f, to) => {
+    const end = after === ']]' ? to + 2 : to;
+    view.dispatch({ changes: { from: f, to: end, insert: t + ']]' }, selection: { anchor: f + t.length + 2 } });
+  } }));
+  const exact = titles.some((t) => t.toLowerCase() === typed.trim().toLowerCase());
+  if (typed.trim() && !exact) {
+    options.push({ label: typed.trim(), detail: 'nouvelle note', type: 'new', boost: -1, apply: (view, c, f, to) => {
+      const end = after === ']]' ? to + 2 : to;
+      view.dispatch({ changes: { from: f, to: end, insert: typed.trim() + ']]' }, selection: { anchor: f + typed.trim().length + 2 } });
+    } });
+  }
+  if (!options.length) return null;
+  void close;
+  return { from, options, filter: false };
+}
+
 export function createEditor(parent, { onChange = () => {}, onFiles = () => {}, onBlur = () => {} } = {}) {
   let readOnly = false;
   const exts = () => [
@@ -499,8 +565,16 @@ export function createEditor(parent, { onChange = () => {}, onFiles = () => {}, 
       v.dispatch({ changes: { from: line.from, to: from, insert: ins }, selection: { anchor: line.from + ins.length }, userEvent: 'input.type' });
       return true;
     }),
+    autocompletion({ override: [wikiCompletion], icons: false, activateOnTyping: true, closeOnBlur: true, maxRenderedOptions: 8 }),
     keymap.of([indentWithTab, ...historyKeymap, ...defaultKeymap]),
     EditorView.domEventHandlers({
+      click: (e) => {
+        const el = e.target?.closest?.('.cm-wiki');
+        if (!el || !el.dataset.wiki) return false;
+        e.preventDefault();
+        hooks.openLink(el.dataset.wiki);
+        return true;
+      },
       focus: (e, v) => { v.dispatch({ effects: setFocus.of(true) }); },
       blur: (e, v) => { v.dispatch({ effects: setFocus.of(false) }); normalizeLine(v); onBlur(); },
       paste: (e) => {
@@ -544,6 +618,8 @@ export function createEditor(parent, { onChange = () => {}, onFiles = () => {}, 
       view.dispatch({ selection: { anchor: l.to }, effects: EditorView.scrollIntoView(l.to, { y: 'center' }) });
     },
     get focused() { return view.hasFocus; },
+    setSyllables(on) { sylOn = !!on; view.dispatch({ effects: setSyl.of(sylOn) }); },
+    get syllables() { return sylOn; },
     /** Index (à partir de 0) de la ligne où se trouve le curseur, ou -1 si l'éditeur n'a pas le focus. */
     cursorLine() { return view.hasFocus ? view.state.doc.lineAt(view.state.selection.main.head).number - 1 : -1; },
     insertBlock: (t) => insertBlock(view, t),

@@ -2,7 +2,7 @@
 import { db } from './db.js';
 import {
   titleOf, snippetOf, plainText, extractTags, parseTasks, ymd, longDay, parseYmd, dueDate,
-  advanceLine, setDueOnLine, timeStr, addDays, startOfDay, dueLabel,
+  advanceLine, setDueOnLine, clearDueOnLine, timeStr, addDays, startOfDay, dueLabel, normKey, extractLinks, wikiSpans, stripInline, parseProps,
 } from './md.js';
 
 const TRASH_DAYS = 30;
@@ -11,6 +11,9 @@ const DEFAULT_SETTINGS = {
   reminderTime: '09:00',
   morningOn: true,
   morningTime: '07:30',
+  reviewOn: true,
+  reviewTime: '18:00',
+  lastReview: null,
   sort: 'updated',
 };
 
@@ -40,6 +43,9 @@ function derive(n) {
   n.snippet = snippetOf(n.body);
   n.tags = extractTags(n.body);
   n._s = (n.title + '\n' + plainText(n.body)).toLowerCase();
+  n._key = normKey(n.title);
+  n._links = extractLinks(n.body);
+  n.props = parseProps(n.body);
   n._tasks = null;
 }
 
@@ -87,6 +93,7 @@ async function purgeIds(ids, { record = true } = {}) {
   if (record && syncEnabled) await addPurged([...ids.map((id) => ({ t: 'notes', id })), ...attIds.map((id) => ({ t: 'attachments', id }))]);
   for (const id of ids) { clearTimeout(timers.get(id)); timers.delete(id); }
   await db.delMany('notes', ids);
+  try { for (const id of ids) { const vs = await db.versionsOf(id); if (vs.length) await db.delMany('versions', vs.map((v) => v.id)); } } catch {}
   if (attIds.length) { await db.deleteAttachments(attIds); attIds.forEach((i) => { state.atts.delete(i); revoke(i); }); }
   ids.forEach((i) => state.notes.delete(i));
 }
@@ -125,9 +132,12 @@ export function createDraft({ folderId = null, body = '', kind = 'note', date = 
   return n;
 }
 
+/** Vide, ou simple modèle de fiche (titre et symboles ☎ ✉ sans texte). */
+const isBlank = (n) => !n.body.trim() || (n.kind === 'person' && n.body.replace(/[#☎✉\s]/g, '') === '');
+
 export function discardIfEmpty(id) {
   const d = state.drafts.get(id);
-  if (d && !d.body.trim()) state.drafts.delete(id);
+  if (d && isBlank(d)) state.drafts.delete(id);
 }
 
 /** source : 'editor' (frappe) ou autre (ex. case cochée depuis la vue Tâches). */
@@ -138,7 +148,7 @@ export function setBody(id, body, source = 'editor') {
   n.updatedAt = Date.now();
   derive(n);
   if (state.drafts.has(id)) {
-    if (!body.trim()) return;
+    if (isBlank(n)) return;
     state.drafts.delete(id);
     state.notes.set(id, n);
     db.put('notes', serialize(n));
@@ -214,12 +224,19 @@ export const foldersList = () => [...state.folders.values()].sort((a, b) => a.na
 // ——— Requêtes ———
 export function liveNotes() { return [...state.notes.values()].filter((n) => !n.deletedAt); }
 
+/** Les éléments de la boîte de réception et les fiches de personnes ont leur propre rubrique. */
+const apart = (n) => n.kind === 'inbox' || n.kind === 'person' || n.kind === 'habit' || n.kind === 'template';
+
 export function query({ view = 'all', folderId = null, tag = null, text = '' } = {}) {
   let list;
   if (view === 'trash') list = [...state.notes.values()].filter((n) => n.deletedAt);
   else if (view === 'journal') list = liveNotes().filter((n) => n.kind === 'daily');
+  else if (view === 'inbox') list = liveNotes().filter((n) => n.kind === 'inbox');
+  else if (view === 'people') list = liveNotes().filter((n) => n.kind === 'person');
+  else if (view === 'habits') list = liveNotes().filter((n) => n.kind === 'habit');
+  else if (view === 'templates') list = liveNotes().filter((n) => n.kind === 'template');
   else {
-    list = liveNotes();
+    list = liveNotes().filter((n) => !apart(n));
     if (view === 'folder') list = list.filter((n) => n.folderId === folderId);
     if (view === 'tag') list = list.filter((n) => n.tags.includes(tag));
   }
@@ -233,6 +250,8 @@ export function query({ view = 'all', folderId = null, tag = null, text = '' } =
   }[sort] || ((a, b) => b.updatedAt - a.updatedAt);
   if (view === 'journal') list.sort((a, b) => (a.date < b.date ? 1 : -1));
   else if (view === 'trash') list.sort((a, b) => b.deletedAt - a.deletedAt);
+  else if (view === 'people') list.sort((a, b) => a.title.localeCompare(b.title, 'fr'));
+  else if (view === 'inbox') list.sort((a, b) => b.createdAt - a.createdAt);
   else list.sort((a, b) => (b.pinned - a.pinned) || cmp(a, b));
   return list;
 }
@@ -254,12 +273,84 @@ export function searchAll(text, limit = 12) {
 export function counts() {
   const live = liveNotes();
   const byFolder = new Map(); const byTag = new Map();
+  let inbox = 0, people = 0;
   for (const n of live) {
+    if (n.kind === 'inbox') inbox++;
+    if (n.kind === 'person') people++;
+    if (apart(n)) continue;
     if (n.folderId) byFolder.set(n.folderId, (byFolder.get(n.folderId) || 0) + 1);
     for (const t of n.tags) byTag.set(t, (byTag.get(t) || 0) + 1);
   }
   const trash = [...state.notes.values()].filter((n) => n.deletedAt).length;
-  return { all: live.length, byFolder, byTag, trash };
+  return { all: live.filter((n) => !apart(n)).length, byFolder, byTag, trash, inbox, people };
+}
+
+// ——— Liens entre notes ———
+
+/** Note dont le titre correspond à `title` (sans tenir compte des accents ni de la casse), ou null. */
+export function resolveTitle(title, { except = null } = {}) {
+  const key = normKey(title);
+  if (!key) return null;
+  let best = null;
+  for (const n of liveNotes()) {
+    if (n.id === except || n._key !== key) continue;
+    if (!best || n.updatedAt > best.updatedAt) best = n;
+  }
+  return best;
+}
+
+/** Notes qui contiennent un lien [[…]] vers la note `id`, avec la ligne où le lien apparaît. */
+export function backlinks(id) {
+  const me = getNote(id);
+  if (!me || !me._key) return [];
+  const out = [];
+  for (const n of liveNotes()) {
+    if (n.id === id || !n._links.includes(me._key)) continue;
+    let line = '';
+    for (const raw of n.body.split('\n')) {
+      if (wikiSpans(raw).some((w) => normKey(w.title) === me._key)) { line = stripInline(raw); break; }
+    }
+    out.push({ note: n, line: line.slice(0, 140) });
+  }
+  return out.sort((a, b) => b.note.updatedAt - a.note.updatedAt);
+}
+
+/** Titres proposés quand on tape [[…]] : notes dont le titre commence par / contient le texte. */
+export function linkSuggestions(text, { except = null, limit = 8 } = {}) {
+  const k = normKey(text);
+  const out = [];
+  for (const n of liveNotes()) {
+    if (n.id === except || !n.title || n.kind === 'inbox') continue;
+    const i = n._key.indexOf(k);
+    if (k && i < 0) continue;
+    out.push([k ? (i === 0 ? 0 : 1) : 2, n]);
+  }
+  out.sort((a, b) => a[0] - b[0] || (b[1].kind === 'person') - (a[1].kind === 'person') || b[1].updatedAt - a[1].updatedAt);
+  return out.slice(0, limit).map((x) => x[1]);
+}
+
+/** Crée (et enregistre) une note dont le titre est `title`. */
+export function createNoteTitled(title, { kind = 'note', extra = '' } = {}) {
+  const d = createDraft({ body: '', kind });
+  setBody(d.id, `# ${title}\n${extra ? extra + '\n' : ''}\n`);
+  return d;
+}
+
+// ——— Versions d'une note (locales) ———
+export async function saveVersion(noteId, label = '') {
+  const n = getNote(noteId);
+  if (!n || !n.body.trim()) return null;
+  const last = (await db.versionsOf(noteId))[0];
+  if (last && last.body === n.body) return last;
+  const v = { id: uid(), noteId, at: Date.now(), body: n.body, label };
+  await db.put('versions', v);
+  return v;
+}
+export const listVersions = (noteId) => db.versionsOf(noteId);
+
+export function setKind(id, kind) {
+  const n = getNote(id);
+  if (n && n.kind !== kind) { touch(n, { kind }); emit({ type: 'notes', id }); }
 }
 
 // ——— Tâches ———
@@ -289,6 +380,22 @@ export function toggleTaskLine(noteId, line) {
   return result;
 }
 
+/** Tâches ouvertes qui mentionnent la note `id` par un lien [[…]]. */
+export function tasksMentioning(id) {
+  const me = getNote(id);
+  if (!me || !me._key) return [];
+  const out = [];
+  for (const n of liveNotes()) {
+    if (n.id === id || !n._links.includes(me._key)) continue;
+    const lines = n.body.split('\n');
+    for (const t of tasksOf(n)) {
+      if (t.done) continue;
+      if (wikiSpans(lines[t.line] || '').some((w) => normKey(w.title) === me._key)) out.push({ ...t, noteId: n.id, noteTitle: n.title });
+    }
+  }
+  return out;
+}
+
 /** Retrouve une tâche ouverte par son texte (la ligne a pu bouger depuis la programmation du rappel). */
 function findOpenTask(n, text, hint) {
   const open = parseTasks(n.body).filter((t) => !t.done && t.text === text);
@@ -313,11 +420,18 @@ export function applyTaskAction(noteId, { text, line }, action, now = new Date()
     setBody(noteId, lines.join('\n'), 'tasks');
     return { text: t.text, label: `Reportée à ${timeStr(at)}` };
   }
-  if (action === 'tomorrow') {
-    const d = addDays(startOfDay(now), 1);
+  if (action === 'tomorrow' || action === 'today' || action === 'monday') {
+    let d = startOfDay(now);
+    if (action === 'tomorrow') d = addDays(d, 1);
+    if (action === 'monday') d = addDays(d, ((8 - d.getDay()) % 7) || 7); // lundi suivant
     lines[t.line] = setDueOnLine(lines[t.line], ymd(d), t.due?.time || null);
     setBody(noteId, lines.join('\n'), 'tasks');
-    return { text: t.text, label: 'Reportée à demain' };
+    return { text: t.text, label: action === 'tomorrow' ? 'Reportée à demain' : action === 'today' ? 'Prévue aujourd’hui' : 'Reportée à lundi' };
+  }
+  if (action === 'clear') {
+    lines[t.line] = clearDueOnLine(lines[t.line]);
+    setBody(noteId, lines.join('\n'), 'tasks');
+    return { text: t.text, label: 'Échéance retirée' };
   }
   return null;
 }

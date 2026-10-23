@@ -2,9 +2,10 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { App as CapApp } from '@capacitor/app';
-import { state, allTasks, applyTaskAction, flush } from './store.js';
+import { state, allTasks, applyTaskAction, flush, getNote } from './store.js';
 import { dueDate, ymd, addDays, startOfDay } from './md.js';
 import * as cal from './calendar.js';
+import { habits, weekCount, toggleHabitDay, streak, parseHabit } from './habits.js';
 
 // `__PLUME_LN__` : faux plugin de notifications utilisé par les tests automatiques.
 const LN = () => globalThis.__PLUME_LN__ || LocalNotifications;
@@ -12,10 +13,14 @@ const native = () => !!globalThis.__PLUME_LN__ || Capacitor.isNativePlatform();
 const MAX_SCHEDULED = 120;
 const MORNING_BASE = 2147483100; // identifiants réservés au point du matin (7 jours)
 const MORNING_DAYS = 7;
+const REVIEW_BASE = 2147483120; // identifiants réservés à la revue du dimanche (4 semaines)
 const ACTION_TYPE = 'plume-task';
+const HABIT_TYPE = 'plume-habit';
+const HABIT_BASE = 2147483200; // 7 identifiants par habitude
 let webTimers = [];
 let onOpenNote = () => {};
 let onOpenToday = () => {};
+let onOpenReview = () => {};
 let onFallback = () => {};
 let onNotice = () => {};
 
@@ -25,17 +30,21 @@ function hash(str) {
   return Math.abs(h) % 2147483000 + 1;
 }
 
-export function setHandlers({ openNote, openToday, fallback, notice }) {
+export function setHandlers({ openNote, openToday, openReview, fallback, notice }) {
   onOpenNote = openNote; onFallback = fallback;
+  if (openReview) onOpenReview = openReview;
   if (openToday) onOpenToday = openToday;
   if (notice) onNotice = notice;
   if (native()) {
     try {
-      LN().registerActionTypes({ types: [{ id: ACTION_TYPE, actions: [
-        { id: 'done', title: 'Fait' },
-        { id: 'hour', title: 'Dans 1 h' },
-        { id: 'tomorrow', title: 'Demain' },
-      ] }] });
+      LN().registerActionTypes({ types: [
+        { id: ACTION_TYPE, actions: [
+          { id: 'done', title: 'Fait' },
+          { id: 'hour', title: 'Dans 1 h' },
+          { id: 'tomorrow', title: 'Demain' },
+        ] },
+        { id: HABIT_TYPE, actions: [{ id: 'done', title: 'Fait' }] },
+      ] });
     } catch (e) { console.warn('Actions de rappel indisponibles', e); }
     LN().addListener('localNotificationActionPerformed', (e) => handleAction(e.actionId, e.notification?.extra || {}));
   }
@@ -43,6 +52,25 @@ export function setHandlers({ openNote, openToday, fallback, notice }) {
 
 /** Réagit à un appui sur une notification ou l'un de ses boutons. */
 export function handleAction(actionId, extra) {
+  if (extra.habit) {
+    if (actionId === 'done') {
+      const n = getNote(extra.habit);
+      if (n) {
+        const hb = parseHabit(n);
+        const key = extra.day || ymd(new Date());
+        if (!hb.days.has(key)) toggleHabitDay(hb.id, key);
+        const st = streak(parseHabit(getNote(hb.id)));
+        flush();
+        onNotice(`${hb.name} : fait${st.n >= 2 ? ` · série de ${st.n} ${st.unit}` : ''}`);
+        reschedule();
+        if (Capacitor.isNativePlatform()) setTimeout(() => { Promise.resolve(CapApp.minimizeApp()).catch(() => {}); }, 1800);
+      }
+      return;
+    }
+    onOpenNote(extra.habit);
+    return;
+  }
+  if (extra.review) { onOpenReview(); return; }
   if (extra.today) { onOpenToday(); return; }
   if (extra.noteId && (actionId === 'done' || actionId === 'hour' || actionId === 'tomorrow')) {
     const r = applyTaskAction(extra.noteId, { text: extra.text, line: extra.line }, actionId);
@@ -118,9 +146,11 @@ export async function morningBriefs(now = new Date()) {
     const parts = [];
     if (evs.length) parts.push(plural(evs.length, 'rendez-vous', 'rendez-vous'));
     if (dayTasks.length) parts.push(plural(dayTasks.length, 'tâche', 'tâches'));
+    const hnames = habits().map((x) => x.name).slice(0, 4);
     const lines = [
       ...evs.map((e) => `${e.allDay ? 'Journée' : hhmm(new Date(e.start))}  ${e.title}`),
       ...dayTasks.map((t) => `☐ ${t.due.time ? t.due.time + '  ' : ''}${t.text}`),
+      ...(hnames.length ? [`↻ Habitudes : ${hnames.join(', ')}`] : []),
     ];
     out.push({
       id: MORNING_BASE + i,
@@ -130,6 +160,58 @@ export async function morningBriefs(now = new Date()) {
       summaryText: 'Plume',
       schedule: { at, allowWhileIdle: true },
       extra: { today: true },
+      smallIcon: 'ic_stat_plume',
+      iconColor: '#F2A33A',
+    });
+  }
+  return out;
+}
+
+/** Rappels d'habitudes (7 prochains jours), sauf les jours déjà validés ou l'objectif de la semaine atteint. */
+export function habitReminders(now = new Date()) {
+  const out = [];
+  habits().forEach((hb, hi) => {
+    if (!hb.reminder) return;
+    const st = streak(hb, now);
+    for (let i = 0; i < 7; i++) {
+      const day = addDays(startOfDay(now), i);
+      const key = ymd(day);
+      const at = dueDate({ date: key, time: null }, hb.reminder);
+      if (at.getTime() <= now.getTime() + 2000) continue;
+      if (hb.days.has(key)) continue;
+      if (hb.perWeek < 7 && weekCount(hb, day) >= hb.perWeek) continue;
+      out.push({
+        id: HABIT_BASE + hi * 7 + i,
+        title: hb.name,
+        body: st.n >= 1 ? `Série en cours : ${st.n} ${st.unit}` : 'C’est le moment.',
+        schedule: { at, allowWhileIdle: true },
+        actionTypeId: HABIT_TYPE,
+        extra: { habit: hb.id, day: key },
+        smallIcon: 'ic_stat_plume',
+        iconColor: '#F2A33A',
+      });
+    }
+  });
+  return out;
+}
+
+/** Rappel du dimanche soir pour la revue de la semaine (4 prochains dimanches). */
+export function reviewReminders(now = new Date()) {
+  if (state.settings.reviewOn === false) return [];
+  const time = state.settings.reviewTime || '18:00';
+  const out = [];
+  const first = startOfDay(now);
+  first.setDate(first.getDate() + ((7 - first.getDay()) % 7)); // prochain dimanche (aujourd'hui compris)
+  for (let i = 0; i < 4; i++) {
+    const day = addDays(first, i * 7);
+    const at = dueDate({ date: ymd(day), time: null }, time);
+    if (at.getTime() <= now.getTime() + 2000) continue;
+    out.push({
+      id: REVIEW_BASE + i,
+      title: 'Revue de la semaine',
+      body: 'Cinq minutes pour faire le point : retards, semaine à venir, boîte de réception.',
+      schedule: { at, allowWhileIdle: true },
+      extra: { review: true },
       smallIcon: 'ic_stat_plume',
       iconColor: '#F2A33A',
     });
@@ -156,6 +238,8 @@ async function doReschedule() {
         iconColor: '#F2A33A',
       }));
       notifications.push(...(await morningBriefs()));
+      notifications.push(...reviewReminders());
+      notifications.push(...habitReminders());
       if (notifications.length) await LN().schedule({ notifications });
     } catch (e) { console.warn('Rappels indisponibles', e); }
     return;

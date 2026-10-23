@@ -2,7 +2,7 @@
 // Chaque enregistrement porte updatedAt / deletedAt : prêt pour une synchronisation ultérieure.
 
 const NAME = 'plume';
-const VERSION = 1;
+const VERSION = 2;
 let dbp = null;
 
 function open() {
@@ -22,6 +22,10 @@ function open() {
       }
       if (!d.objectStoreNames.contains('blobs')) d.createObjectStore('blobs', { keyPath: 'id' });
       if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', { keyPath: 'key' });
+      if (!d.objectStoreNames.contains('versions')) {
+        const s = d.createObjectStore('versions', { keyPath: 'id' });
+        s.createIndex('noteId', 'noteId');
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -77,6 +81,12 @@ export const db = {
     return run(['attachments', 'blobs'], 'readwrite', (tx) => {
       ids.forEach((id) => { tx.objectStore('attachments').delete(id); tx.objectStore('blobs').delete(id); });
     });
+  },
+  /** Versions d'une note (stockées sur l'appareil seulement), les plus récentes d'abord. */
+  async versionsOf(noteId) {
+    const d = await open();
+    const all = await reqP(d.transaction('versions').objectStore('versions').index('noteId').getAll(noteId));
+    return all.sort((a, b) => b.at - a.at);
   },
   async getBlob(id) {
     const d = await open();

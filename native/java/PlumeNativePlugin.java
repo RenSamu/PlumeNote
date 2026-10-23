@@ -3,10 +3,13 @@ package app.plume.notes;
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.database.Cursor;
 import android.os.Bundle;
+import android.provider.ContactsContract;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -16,6 +19,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Pont natif de Plume :
@@ -24,7 +29,10 @@ import java.util.ArrayList;
  */
 @CapacitorPlugin(
     name = "PlumeNative",
-    permissions = { @Permission(strings = { Manifest.permission.RECORD_AUDIO }, alias = "microphone") }
+    permissions = {
+        @Permission(strings = { Manifest.permission.RECORD_AUDIO }, alias = "microphone"),
+        @Permission(strings = { Manifest.permission.READ_CONTACTS }, alias = "contacts")
+    }
 )
 public class PlumeNativePlugin extends Plugin {
     private SpeechRecognizer recognizer;
@@ -47,6 +55,117 @@ public class PlumeNativePlugin extends Plugin {
             .apply();
         AgendaWidget.refreshAll(getContext());
         call.resolve();
+    }
+
+    // ——— Contacts ———
+
+    @PluginMethod
+    public void listContacts(PluginCall call) {
+        if (getPermissionState("contacts") != PermissionState.GRANTED) {
+            requestPermissionForAlias("contacts", call, "contactsResult");
+            return;
+        }
+        readContacts(call);
+    }
+
+    @PermissionCallback
+    private void contactsResult(PluginCall call) {
+        if (getPermissionState("contacts") == PermissionState.GRANTED) {
+            readContacts(call);
+        } else {
+            call.reject("Accès aux contacts refusé", "permission");
+        }
+    }
+
+    private void readContacts(final PluginCall call) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Map<String, JSObject> byId = new LinkedHashMap<String, JSObject>();
+                    Map<String, JSArray> phones = new LinkedHashMap<String, JSArray>();
+                    Map<String, JSArray> emails = new LinkedHashMap<String, JSArray>();
+
+                    Cursor c = getContext().getContentResolver().query(
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        new String[] {
+                            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                            ContactsContract.CommonDataKinds.Phone.NUMBER
+                        },
+                        null, null, null
+                    );
+                    if (c != null) {
+                        try {
+                            while (c.moveToNext() && byId.size() < 4000) {
+                                String id = c.getString(0);
+                                if (id == null) continue;
+                                if (!byId.containsKey(id)) {
+                                    JSObject o = new JSObject();
+                                    o.put("name", c.getString(1) == null ? "" : c.getString(1));
+                                    byId.put(id, o);
+                                    phones.put(id, new JSArray());
+                                    emails.put(id, new JSArray());
+                                }
+                                String num = c.getString(2);
+                                if (num != null && !contains(phones.get(id), num)) phones.get(id).put(num);
+                            }
+                        } finally {
+                            c.close();
+                        }
+                    }
+
+                    Cursor e = getContext().getContentResolver().query(
+                        ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+                        new String[] {
+                            ContactsContract.CommonDataKinds.Email.CONTACT_ID,
+                            ContactsContract.CommonDataKinds.Email.DISPLAY_NAME,
+                            ContactsContract.CommonDataKinds.Email.ADDRESS
+                        },
+                        null, null, null
+                    );
+                    if (e != null) {
+                        try {
+                            while (e.moveToNext() && byId.size() < 4000) {
+                                String id = e.getString(0);
+                                if (id == null) continue;
+                                if (!byId.containsKey(id)) {
+                                    JSObject o = new JSObject();
+                                    o.put("name", e.getString(1) == null ? "" : e.getString(1));
+                                    byId.put(id, o);
+                                    phones.put(id, new JSArray());
+                                    emails.put(id, new JSArray());
+                                }
+                                String addr = e.getString(2);
+                                if (addr != null && !contains(emails.get(id), addr)) emails.get(id).put(addr);
+                            }
+                        } finally {
+                            e.close();
+                        }
+                    }
+
+                    JSArray list = new JSArray();
+                    for (Map.Entry<String, JSObject> en : byId.entrySet()) {
+                        JSObject o = en.getValue();
+                        o.put("phones", phones.get(en.getKey()));
+                        o.put("emails", emails.get(en.getKey()));
+                        list.put(o);
+                    }
+                    JSObject ret = new JSObject();
+                    ret.put("contacts", list);
+                    call.resolve(ret);
+                } catch (Exception ex) {
+                    call.reject("Lecture des contacts impossible", "unavailable");
+                }
+            }
+        }).start();
+    }
+
+    private static boolean contains(JSArray arr, String value) {
+        for (int i = 0; i < arr.length(); i++) {
+            if (value.equals(arr.optString(i))) return true;
+        }
+        return false;
     }
 
     // ——— Dictée ———

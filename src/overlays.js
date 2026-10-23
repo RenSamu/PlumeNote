@@ -58,6 +58,13 @@ export function openPalette() {
     { icon: 'plus', label: 'Nouvelle note', kbd: 'Alt N', run: () => ctx.newNote() },
     { icon: 'sun', label: "Ouvrir la note d'aujourd'hui", kbd: 'Alt J', run: () => ctx.openToday() },
     { icon: 'tasks', label: 'Voir toutes les tâches', kbd: 'Alt T', run: () => ctx.openCollection({ c: 'tasks' }) },
+    { icon: 'inbox', label: 'Boîte de réception', run: () => ctx.openCollection({ c: 'inbox' }) },
+    { icon: 'people', label: 'Personnes', run: () => ctx.openCollection({ c: 'people' }) },
+    { icon: 'people', label: 'Nouvelle fiche de personne', run: () => ctx.newPerson() },
+    { icon: 'habit', label: 'Habitudes', run: () => ctx.openCollection({ c: 'habits' }) },
+    { icon: 'clock', label: 'Temps passé', run: () => ctx.openCollection({ c: 'time' }) },
+    { icon: 'file', label: 'Nouvelle note depuis un modèle', run: () => ctx.openTemplates() },
+    { icon: 'review', label: 'Revue de la semaine', run: () => ctx.openReview() },
     { icon: 'file', label: 'Toutes les notes', run: () => ctx.openCollection({ c: 'all' }) },
     { icon: 'trash', label: 'Corbeille', run: () => ctx.openCollection({ c: 'trash' }) },
     { icon: 'settings', label: 'Réglages', run: () => ctx.openSettings() },
@@ -91,7 +98,7 @@ export function openPalette() {
           if (it.group !== last) { list.appendChild(h('div', { class: 'pal-group' }, it.group)); last = it.group; }
           const row = it.note
             ? h('button', { class: 'pal-item', type: 'button', role: 'option', 'aria-selected': String(i === sel) },
-                h('span', { class: 'pal-ic', html: icon(it.note.kind === 'daily' ? 'sun' : 'file', 18) }),
+                h('span', { class: 'pal-ic', html: icon({ daily: 'sun', person: 'people', inbox: 'inbox' }[it.note.kind] || 'file', 18) }),
                 h('span', { class: 'pal-main' }, h('span', { class: 'pal-title' }, mark(it.note.title || 'Note vide', terms)),
                   it.note.snippet ? h('span', { class: 'pal-sub' }, it.note.snippet) : null))
             : h('button', { class: 'pal-item', type: 'button', role: 'option', 'aria-selected': String(i === sel) },
@@ -147,6 +154,9 @@ export function openSettings() {
       const mtime = h('input', { class: 'field narrow', type: 'time', value: state.settings.morningTime || '07:30', 'aria-label': 'Heure du point du matin',
         onchange: (e) => { if (e.target.value) { setSetting('morningTime', e.target.value); reschedule(); } } });
 
+      const rtime = h('input', { class: 'field narrow', type: 'time', value: state.settings.reviewTime || '18:00', 'aria-label': 'Heure de la revue du dimanche',
+        onchange: (e) => { if (e.target.value) { setSetting('reviewTime', e.target.value); reschedule(); } } });
+
       return h('div', { class: 'settings-body' },
         h('section', {},
           h('h3', {}, 'Capture'),
@@ -157,7 +167,10 @@ export function openSettings() {
           h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure par défaut'), h('div', { class: 'set-desc' }, "Pour une échéance sans heure précise.")), time),
           toggle('Point du matin', 'Une notification chaque matin : vos rendez-vous et vos tâches du jour (rien si la journée est vide).', state.settings.morningOn !== false,
             async (v) => { setSetting('morningOn', v); if (v && (await permissionState()) !== 'granted') { await requestPermission(); refreshPerm(); } reschedule(); }),
-          h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure du point du matin')), mtime)),
+          h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure du point du matin')), mtime),
+          toggle('Revue du dimanche', 'Un rappel le dimanche soir pour faire le point sur la semaine.', state.settings.reviewOn !== false,
+            async (v) => { setSetting('reviewOn', v); if (v && (await permissionState()) !== 'granted') { await requestPermission(); refreshPerm(); } reschedule(); }),
+          h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, 'Heure de la revue')), rtime)),
         h('section', {},
           h('h3', {}, 'Données'),
           h('p', { class: 'set-desc flat' }, `${stats.notes} note${stats.notes > 1 ? 's' : ''}, ${stats.attachments} pièce${stats.attachments > 1 ? 's' : ''} jointe${stats.attachments > 1 ? 's' : ''} (${humanSize(stats.attachmentBytes)}), stockées sur cet appareil.`),
