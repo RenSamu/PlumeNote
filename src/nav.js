@@ -2,6 +2,10 @@
 //   collections : all, journal, tasks, folder/<id>, tag/<nom>, trash
 // Commandes : #/new, #/today (créent ou ouvrent, puis remplacent le hash)
 
+// Vues « outils » : pas de liste de notes, un écran dédié.
+export const TOOL_ROUTES = ['habits', 'time', 'shopping', 'budget', 'health', 'timer', 'outside'];
+export const isTool = (c) => TOOL_ROUTES.includes(c);
+
 export function parseHash(hash = location.hash) {
   const raw = hash.replace(/^#\/?/, '');
   const [path, qs] = raw.split('?');

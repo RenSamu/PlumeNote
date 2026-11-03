@@ -225,7 +225,8 @@ export const foldersList = () => [...state.folders.values()].sort((a, b) => a.na
 export function liveNotes() { return [...state.notes.values()].filter((n) => !n.deletedAt); }
 
 /** Les éléments de la boîte de réception et les fiches de personnes ont leur propre rubrique. */
-const apart = (n) => n.kind === 'inbox' || n.kind === 'person' || n.kind === 'habit' || n.kind === 'template';
+const DATA_KIND = new Set(['shopping', 'budget', 'health']);
+const apart = (n) => n.kind === 'inbox' || n.kind === 'person' || n.kind === 'habit' || n.kind === 'template' || n.kind === 'shopping' || n.kind === 'budget' || n.kind === 'health';
 
 export function query({ view = 'all', folderId = null, tag = null, text = '' } = {}) {
   let list;
@@ -358,7 +359,7 @@ export function tasksOf(n) { return (n._tasks ??= parseTasks(n.body)); }
 
 export function allTasks() {
   const out = [];
-  for (const n of liveNotes()) for (const t of tasksOf(n)) out.push({ ...t, noteId: n.id, noteTitle: n.title });
+  for (const n of liveNotes()) if (!DATA_KIND.has(n.kind)) for (const t of tasksOf(n)) out.push({ ...t, noteId: n.id, noteTitle: n.title });
   return out;
 }
 

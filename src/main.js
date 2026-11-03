@@ -5,7 +5,7 @@ import { App as CapApp } from '@capacitor/app';
 import { h, toast, closeTopLayer, hasLayer, frame } from './ui.js';
 import { icon } from './icons.js';
 import { ctx } from './ctx.js';
-import { parseHash, hashFor, go } from './nav.js';
+import { parseHash, hashFor, go, isTool } from './nav.js';
 import {
   init, subscribe, state, createDraft, dailyFor, setBody, togglePin, flush, setSetting, getNote, query, uid, appendTaskToToday,
 } from './store.js';
@@ -93,7 +93,7 @@ async function boot() {
   // ——— Actions ———
   const baseRoute = () => {
     const c = ctx.route.c;
-    return c === 'tasks' || c === 'trash' || c === 'journal' || c === 'inbox' || c === 'people' || c === 'habits' || c === 'time' ? { c: 'all', arg: null } : { c, arg: ctx.route.arg };
+    return c === 'tasks' || c === 'trash' || c === 'journal' || c === 'inbox' || c === 'people' || isTool(c) ? { c: 'all', arg: null } : { c, arg: ctx.route.arg };
   };
   ctx.openNote = (id, { line = null } = {}) => go({ ...ctx.route, note: id, line });
   ctx.closeNote = ({ replace = false } = {}) => {

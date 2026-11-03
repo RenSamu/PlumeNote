@@ -70,3 +70,13 @@ Les clés publiques du projet sont dans `src/config.js`.
 - **Temps passé** : écrire `temps: 1h30`, `temps: 45min` ou `temps: 1,5h` (ou avec ⏱, ou `durée:`, `tps:`) dans une note ; le client est le `[[lien]]` de la même ligne, sinon le premier lien de la note. Résumé copiable pour un ticket.
 - **Collections** : propriétés `clé:: valeur` (ex. `statut:: lu`, `note:: 5`) ; pastilles dans la liste, filtre par statut dans les vues d'étiquette.
 - **Mode écriture** (menu ⋯) : plein écran, compteur de syllabes ≈ (automatique avec #poème), versions. Les versions restent sur l'appareil (non synchronisées). Le décompte de syllabes est approximatif (pas de diérèse).
+
+## Phase 3 bis — le quotidien (v0.7.0)
+
+Le menu est regroupé : **Suivi** (Habitudes, Santé, Minuteur, Temps passé), **Quotidien** (Courses, Budget, Météo et trains), **Personnes et modèles**, **Dossiers**, **Étiquettes**. L'état ouvert/fermé est mémorisé ; le groupe de la page affichée reste ouvert.
+
+- **Courses** : listes de cases à cocher (kind `shopping`), plusieurs listes possibles, « Vider » retire les articles cochés. Ne comptent pas dans « Tâches ».
+- **Budget** : une note par mois (`Budget 2026-11`), lignes `AAAA-MM-JJ | -12.50 | Catégorie | libellé`. Totaux, catégories, plafond (`plafond:: 2500`), export CSV copié. Aucune connexion bancaire.
+- **Santé** : une note `Santé` ; lignes `AAAA-MM-JJ poids 78,5` et `AAAA-MM-JJ séance Push 60min`, `objectif:: 85`. Courbe de poids, séances de la semaine.
+- **Minuteur** : chrono libre, 25 ou 50 min. À l'arrêt, ajoute `temps: 25min [[Client]]` au journal du jour (compté dans « Temps passé »). Notification de fin (APK) ; l'état survit à la fermeture de l'appli.
+- **Météo et trains** : Open-Meteo (météo, ville modifiable) et transport.opendata.ch (prochains départs, retards, voies). Trajets par défaut Sion ↔ Martigny, modifiables. Nécessite une connexion ; les dernières données restent affichées hors ligne.

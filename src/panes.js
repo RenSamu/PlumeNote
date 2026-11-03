@@ -3,6 +3,12 @@ import { dictateSheet, supported as dictSupported } from './dictate-ui.js';
 import { openTriage } from './inbox.js';
 import { renderHabits, pendingToday } from './habits.js';
 import { renderTime } from './time.js';
+import { renderShopping, openCount as shoppingOpen } from './shopping.js';
+import { renderBudget } from './budget.js';
+import { renderHealth } from './health.js';
+import { renderTimer, isRunning as timerRunning } from './timer.js';
+import { renderOutside } from './outside.js';
+import { isTool } from './nav.js';
 import { openContactPicker, contactsSupported } from './people.js';
 import { h } from './ui.js';
 import { icon } from './icons.js';
@@ -27,6 +33,37 @@ function sbItem(ic, label, { active, count, accent, onClick, onMenu }) {
   return el;
 }
 
+
+// Groupes repliables : l'état est mémorisé ; le groupe de la page affichée reste ouvert.
+const SB_KEY = 'plume.sidebar';
+const sbState = () => { try { return JSON.parse(localStorage.getItem(SB_KEY) || '{}'); } catch { return {}; } };
+function sbGroup(id, label, routes, r, { badge, count, add, defaultOpen = false } = {}, items) {
+  const saved = sbState();
+  const active = routes.includes(r.c);
+  let open = active || (saved[id] ?? defaultOpen);
+  const body = h('div', { class: 'sb-gbody' }, items);
+  const chev = h('span', { class: 'sb-chev', html: icon('chevron', 14) });
+  const toggle = h('button', { class: 'sb-gtoggle', type: 'button', 'aria-expanded': String(open), 'aria-controls': 'sbg-' + id }, chev, h('span', { class: 'sb-glabel' }, label),
+    h('span', { class: 'sb-gbadge' }));
+  const head = h('div', { class: 'sb-ghead' }, toggle, add || null);
+  body.id = 'sbg-' + id;
+  const badgeEl = toggle.querySelector('.sb-gbadge');
+  const paint = () => {
+    body.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    head.classList.toggle('open', open);
+    const v = open ? '' : (badge || count || '');
+    badgeEl.textContent = v ? String(v) : '';
+  };
+  toggle.addEventListener('click', () => {
+    open = !open;
+    try { const s = sbState(); s[id] = open; localStorage.setItem(SB_KEY, JSON.stringify(s)); } catch {}
+    paint();
+  });
+  paint();
+  return h('div', { class: 'sb-group' + (active ? ' has-active' : '') }, head, body);
+}
+
 export function renderSidebar(el) {
   const c = counts();
   const ts = taskStats();
@@ -48,25 +85,34 @@ export function renderSidebar(el) {
         active: r.c === 'tasks', count: ts.overdue || ts.open, accent: ts.overdue > 0,
         onClick: nav(() => ctx.openCollection({ c: 'tasks' })),
       }),
-      sbItem('habit', 'Habitudes', { active: r.c === 'habits', count: pendingToday().length, accent: false, onClick: nav(() => ctx.openCollection({ c: 'habits' })) }),
       sbItem('inbox', 'Boîte de réception', { active: r.c === 'inbox', count: c.inbox, accent: c.inbox > 0, onClick: nav(() => ctx.openCollection({ c: 'inbox' })) }),
-      sbItem('people', 'Personnes', { active: r.c === 'people', count: c.people, onClick: nav(() => ctx.openCollection({ c: 'people' })) }),
-      sbItem('clock', 'Temps passé', { active: r.c === 'time', onClick: nav(() => ctx.openCollection({ c: 'time' })) }),
-      sbItem('file', 'Modèles', { onClick: nav(() => ctx.openTemplates()) }),
-      sbItem('review', 'Revue de la semaine', { onClick: nav(() => ctx.openReview()) }),
-      h('div', { class: 'sb-section' },
-        h('span', {}, 'Dossiers'),
-        h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Nouveau dossier', onclick: async () => {
-          const name = await promptDialog({ title: 'Nouveau dossier', label: 'Nom du dossier', confirm: 'Créer' });
-          if (name) { const f = createFolder(name); ctx.closeDrawer(); ctx.openCollection({ c: 'folder', arg: f.id }); }
-        }, html: icon('plus', 16) })),
+      sbGroup('suivi', 'Suivi', ['habits', 'time', 'health', 'timer'], r, { badge: pendingToday().length || (timerRunning() ? '▶' : '') }, [
+        sbItem('habit', 'Habitudes', { active: r.c === 'habits', count: pendingToday().length, onClick: nav(() => ctx.openCollection({ c: 'habits' })) }),
+        sbItem('heart', 'Santé', { active: r.c === 'health', onClick: nav(() => ctx.openCollection({ c: 'health' })) }),
+        sbItem('timer', 'Minuteur', { active: r.c === 'timer', count: timerRunning() ? '▶' : '', accent: timerRunning(), onClick: nav(() => ctx.openCollection({ c: 'timer' })) }),
+        sbItem('clock', 'Temps passé', { active: r.c === 'time', onClick: nav(() => ctx.openCollection({ c: 'time' })) }),
+      ]),
+      sbGroup('quotidien', 'Quotidien', ['shopping', 'budget', 'outside'], r, { badge: shoppingOpen() }, [
+        sbItem('cart', 'Courses', { active: r.c === 'shopping', count: shoppingOpen(), onClick: nav(() => ctx.openCollection({ c: 'shopping' })) }),
+        sbItem('wallet', 'Budget', { active: r.c === 'budget', onClick: nav(() => ctx.openCollection({ c: 'budget' })) }),
+        sbItem('cloud', 'Météo et trains', { active: r.c === 'outside', onClick: nav(() => ctx.openCollection({ c: 'outside' })) }),
+      ]),
+      sbGroup('savoir', 'Personnes et modèles', ['people'], r, {}, [
+        sbItem('people', 'Personnes', { active: r.c === 'people', count: c.people, onClick: nav(() => ctx.openCollection({ c: 'people' })) }),
+        sbItem('file', 'Modèles', { onClick: nav(() => ctx.openTemplates()) }),
+        sbItem('review', 'Revue de la semaine', { onClick: nav(() => ctx.openReview()) }),
+      ]),
+      sbGroup('dossiers', 'Dossiers', ['folder'], r, { count: folders.length, defaultOpen: true, add: h('button', { class: 'icon-btn sm', type: 'button', 'aria-label': 'Nouveau dossier', onclick: async () => {
+        const name = await promptDialog({ title: 'Nouveau dossier', label: 'Nom du dossier', confirm: 'Créer' });
+        if (name) { const f = createFolder(name); ctx.closeDrawer(); ctx.openCollection({ c: 'folder', arg: f.id }); }
+      }, html: icon('plus', 16) }) },
       folders.length ? folders.map((f) => sbItem('folder', f.name, {
         active: r.c === 'folder' && r.arg === f.id, count: c.byFolder.get(f.id) || 0,
         onClick: nav(() => ctx.openCollection({ c: 'folder', arg: f.id })),
         onMenu: (anchor) => folderMenu(anchor, f),
-      })) : h('p', { class: 'sb-hint' }, 'Aucun dossier. Les étiquettes #mot suffisent souvent.'),
-      tags.length ? h('div', { class: 'sb-section' }, h('span', {}, 'Étiquettes')) : null,
-      tags.map(([t, n]) => sbItem('hash', t, { active: r.c === 'tag' && r.arg === t, count: n, onClick: nav(() => ctx.openCollection({ c: 'tag', arg: t })) }))),
+      })) : [h('p', { class: 'sb-hint' }, 'Aucun dossier. Les étiquettes #mot suffisent souvent.')]),
+      tags.length ? sbGroup('etiquettes', 'Étiquettes', ['tag'], r, { count: tags.length },
+        tags.map(([t, n]) => sbItem('hash', t, { active: r.c === 'tag' && r.arg === t, count: n, onClick: nav(() => ctx.openCollection({ c: 'tag', arg: t })) }))) : null),
     h('div', { class: 'sb-foot' },
       sbItem('trash', 'Corbeille', { active: r.c === 'trash', count: c.trash, onClick: nav(() => ctx.openCollection({ c: 'trash' })) }),
       sbItem('settings', 'Réglages', { onClick: nav(() => ctx.openSettings()) })));
@@ -98,6 +144,11 @@ export function collectionTitle(r = ctx.route) {
     case 'people': return 'Personnes';
     case 'habits': return 'Habitudes';
     case 'time': return 'Temps passé';
+    case 'shopping': return 'Courses';
+    case 'budget': return 'Budget';
+    case 'health': return 'Santé';
+    case 'timer': return 'Minuteur';
+    case 'outside': return 'Météo et trains';
     case 'folder': return state.folders.get(r.arg)?.name || 'Dossier';
     case 'tag': return `#${r.arg}`;
     default: return 'Notes';
@@ -161,13 +212,16 @@ export function renderList(els) {
   const { title, count, extra, body, search, sort, fab } = els;
   title.textContent = collectionTitle();
   const isTasks = r.c === 'tasks';
-  const isHabits = r.c === 'habits';
-  const isTime = r.c === 'time';
-  search.parentElement.hidden = isTasks || isHabits || isTime;
-  fab.hidden = r.c === 'trash' || r.c === 'inbox' || isTasks || isHabits || isTime;
-  sort.hidden = isTasks || isHabits || isTime || r.c === 'journal' || r.c === 'trash';
-  if (isHabits) { renderHabits(extra, body, count); return; }
-  if (isTime) { renderTime(extra, body, count); return; }
+  const tool = isTool(r.c);
+  if (extra.dataset.tool && extra.dataset.tool !== r.c) { extra.replaceChildren(); delete extra.dataset.tool; }
+  search.parentElement.hidden = isTasks || tool;
+  fab.hidden = r.c === 'trash' || r.c === 'inbox' || isTasks || tool;
+  sort.hidden = isTasks || tool || r.c === 'journal' || r.c === 'trash';
+  if (tool) {
+    extra.dataset.tool = r.c;
+    ({ habits: renderHabits, time: renderTime, shopping: renderShopping, budget: renderBudget, health: renderHealth, timer: renderTimer, outside: renderOutside })[r.c](extra, body, count);
+    return;
+  }
 
   if (isTasks) { count.textContent = ''; renderTasks(extra, body, count); return; }
 
