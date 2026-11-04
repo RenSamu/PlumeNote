@@ -1,7 +1,7 @@
 // Widget Agenda de l'écran d'accueil : Android ne peut pas lire la base de l'application,
 // on lui dépose donc un instantané (7 jours de rendez-vous et de tâches) à chaque changement.
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { state, allTasks } from './store.js';
+import { state, allTasks, getNote } from './store.js';
 import { ymd, addDays, startOfDay } from './md.js';
 import * as cal from './calendar.js';
 
@@ -17,7 +17,10 @@ export async function buildSnapshot(now = new Date()) {
   const today = ymd(now);
   let events = {};
   try { if ((await cal.permission()) === 'granted') events = await cal.eventsByDay(today, DAYS); } catch {}
-  const tasks = allTasks().filter((t) => !t.done && t.due);
+  const open = allTasks().filter((t) => !t.done);
+  const tasks = open.filter((t) => t.due);
+  // Une tâche sans échéance écrite dans le journal du jour compte pour aujourd'hui.
+  const todayUndated = open.filter((t) => !t.due && (() => { const n = getNote(t.noteId); return n && n.kind === 'daily' && n.date === today; })());
   const days = {};
   for (let i = 0; i < DAYS; i++) {
     const key = ymd(addDays(startOfDay(now), i));
@@ -27,6 +30,7 @@ export async function buildSnapshot(now = new Date()) {
       if (i === 0 ? t.due.date <= key : t.due.date === key) rows.push({ s: t.due.time || '', t: t.text, k: 't', late: i === 0 && t.due.date < key });
     }
     // Journée entière d'abord, puis par heure, puis les tâches sans heure.
+    if (i === 0) for (const t of todayUndated) rows.push({ s: '', t: t.text, k: 't', late: false });
     rows.sort((a, b) => {
       const ka = a.s || (a.k === 'e' ? '' : '~'), kb = b.s || (b.k === 'e' ? '' : '~');
       return ka < kb ? -1 : ka > kb ? 1 : 0;

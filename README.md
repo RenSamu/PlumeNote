@@ -80,3 +80,7 @@ Le menu est regroupé : **Suivi** (Habitudes, Santé, Minuteur, Temps passé), *
 - **Santé** : une note `Santé` ; lignes `AAAA-MM-JJ poids 78,5` et `AAAA-MM-JJ séance Push 60min`, `objectif:: 85`. Courbe de poids, séances de la semaine.
 - **Minuteur** : chrono libre, 25 ou 50 min. À l'arrêt, ajoute `temps: 25min [[Client]]` au journal du jour (compté dans « Temps passé »). Notification de fin (APK) ; l'état survit à la fermeture de l'appli.
 - **Météo et trains** : Open-Meteo (météo, ville modifiable) et transport.opendata.ch (prochains départs, retards, voies). Trajets par défaut Sion ↔ Martigny, modifiables. Nécessite une connexion ; les dernières données restent affichées hors ligne.
+
+## v0.7.1 — dictée de tâches
+
+Une tâche dictée ou saisie rapidement comprend maintenant le jour en début ou en fin de phrase, avec ou sans heure : « demain migration Windows 11 », « appeler Marc lundi à 9 h », « dans 3 jours rendre le rapport », « le 15 novembre renouveler le certificat », « ce soir sortir les poubelles », « rappeler Paul à 16 h ». Le jour devient l'échéance (`@AAAA-MM-JJ`), donc la tâche apparaît dans Tâches, dans le widget et dans les rappels. Une tâche sans date écrite dans le journal du jour s'affiche aujourd'hui dans le widget.

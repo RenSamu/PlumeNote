@@ -1,6 +1,6 @@
 {
   "name": "plume",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Plume — prise de notes rapide, locale d'abord, synchronisable.",
   "type": "module",

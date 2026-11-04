@@ -2,7 +2,7 @@
 import { db } from './db.js';
 import {
   titleOf, snippetOf, plainText, extractTags, parseTasks, ymd, longDay, parseYmd, dueDate,
-  advanceLine, setDueOnLine, clearDueOnLine, timeStr, addDays, startOfDay, dueLabel, normKey, extractLinks, wikiSpans, stripInline, parseProps,
+  advanceLine, setDueOnLine, clearDueOnLine, timeStr, addDays, startOfDay, dueLabel, normKey, extractLinks, wikiSpans, stripInline, parseProps, normalizeDates, spokenTask,
 } from './md.js';
 
 const TRASH_DAYS = 30;
@@ -440,7 +440,9 @@ export function applyTaskAction(noteId, { text, line }, action, now = new Date()
 export function appendTaskToToday(text) {
   const today = ymd(new Date());
   const n = dailyFor(today);
-  const body = n.body.replace(/\s*$/, '') + `\n- [ ] ${text.trim()}\n`;
+  // « demain migration Windows 11 » → échéance reconnue, donc visible dans « Tâches », le widget et les rappels.
+  const line = normalizeDates('- [ ] ' + spokenTask(text)).replace(/^- \[ \] /, '');
+  const body = n.body.replace(/\s*$/, '') + `\n- [ ] ${line.trim()}\n`;
   setBody(n.id, body, 'tasks');
   return n;
 }

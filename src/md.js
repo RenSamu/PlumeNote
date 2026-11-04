@@ -237,6 +237,81 @@ const TIME_ONLY_RE = new RegExp('(^|\\s)' + TIME_SRC + END, 'iu');
 export const maybeDated = (line) =>
   line.includes('@') || /\d\s*h|\d:\d/i.test(line) || /chaque|tous\s+les|toutes\s+les|quotidien|hebdo|mensuel|annuel|en\s+semaine/i.test(line);
 
+// ——— Phrases dictées : « demain migration Windows 11 », « appeler Marc lundi à 9h », « dans 3 jours rendre le rapport » ———
+
+const MONTHS_FR = ['janvier', 'février', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'aout', 'septembre', 'octobre', 'novembre', 'décembre', 'decembre'];
+const MONTH_NUM = { janvier: 0, février: 1, fevrier: 1, mars: 2, avril: 3, mai: 4, juin: 5, juillet: 6, août: 7, aout: 7, septembre: 8, octobre: 9, novembre: 10, décembre: 11, decembre: 11 };
+const NUM_WORDS = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10 };
+const WHEN_SRC = [
+  "(apr[eè]s[\\s-]?demain|demain|aujourd['’]?hui|ce\\s+soir|ce\\s+matin|cet\\s+apr[eè]s-midi|dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi)(?:\\s+(prochain|matin|soir|apr[eè]s-midi))?",
+  "dans\\s+(\\d{1,2}|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix)\\s+(jours?|semaines?)",
+  "(la\\s+semaine\\s+prochaine)",
+  "(\\d{1,2})(?:er)?\\s+(" + Object.keys(MONTH_NUM).join('|') + ")",
+  "(\\d{1,2})\\/(\\d{1,2})",
+].map((x) => '(?:' + x + ')').join('|');
+const LEAD_IN = "(?:(?:pour|le|rappelle-moi|rappelle\\s+moi|penser\\s+[àa])\\s+)*";
+const SPOKEN_START = new RegExp('^' + LEAD_IN + '(?:' + WHEN_SRC + ')(?=\\s|,|:|$)[\\s,:;-]*', 'iu');
+const SPOKEN_END = new RegExp('[\\s,]+(?:pour\\s+|le\\s+|pr[eé]vu\\s+)?(?:' + WHEN_SRC + ')\\s*[.!]?$', 'iu');
+
+function whenToDate(g, now) {
+  const base = startOfDay(now);
+  // g : groupes de WHEN_SRC dans l'ordre (jour, qualificatif, n, unité, semaine prochaine, j, mois, j2, m2)
+  const [word, qual, n, unit, nextWeek, dd, mon, d2, m2] = g;
+  if (word) {
+    const w = word.toLowerCase().replace(/\s+/g, ' ').replace('’', "'");
+    if (/^ce soir$/.test(w)) return { date: base, time: '18:00' };
+    if (/^ce matin$/.test(w) || /^aujourd/.test(w) || /^cet apr/.test(w)) return { date: base, time: null };
+    const d = resolveToken(w.replace(/^apr[eè]s\s+demain$/, 'après-demain'), now);
+    if (!d) return null;
+    return { date: d, time: qual && /^soir$/i.test(qual) ? '18:00' : null };
+  }
+  if (n) {
+    const k = /^\d/.test(n) ? +n : NUM_WORDS[n.toLowerCase()];
+    return { date: addDays(base, /^s/i.test(unit) ? 7 * k : k), time: null };
+  }
+  if (nextWeek) { const mon0 = addDays(base, ((8 - base.getDay()) % 7) || 7); return { date: mon0, time: null }; }
+  if (dd) {
+    let d = new Date(base.getFullYear(), MONTH_NUM[mon.toLowerCase()], +dd);
+    if (d < base) d = new Date(base.getFullYear() + 1, MONTH_NUM[mon.toLowerCase()], +dd);
+    return { date: d, time: null };
+  }
+  if (d2) {
+    let d = new Date(base.getFullYear(), +m2 - 1, +d2);
+    if (d < base) d = new Date(base.getFullYear() + 1, +m2 - 1, +d2);
+    return { date: d, time: null };
+  }
+  return null;
+}
+
+/**
+ * « demain migration Windows 11 » → « Migration Windows 11 @2026-11-04 ».
+ * Cherche un jour en début ou en fin de phrase (avec une heure facultative : « à 14h30 »).
+ * Rend le texte inchangé s'il contient déjà une échéance, une récurrence ou aucune date reconnue.
+ */
+export function spokenTask(text, now = new Date()) {
+  const raw = String(text).trim();
+  if (!raw || DUE_RE.test(raw) || /@|↻/.test(raw) || /chaque|tous\s+les|toutes\s+les|quotidien|hebdo|mensuel|annuel|en\s+semaine/i.test(raw)) return raw;
+  // L'heure (« à 14h30 ») peut se trouver n'importe où : on la met de côté avant de chercher le jour.
+  const tm = TIME_ONLY_RE.exec(raw);
+  const t = tm && timeOf(tm.slice(2, 8));
+  let rest = t ? raw.replace(TIME_ONLY_RE, '$1').replace(/\s{2,}/g, ' ').trim() : raw;
+  let hit = null;
+  let m = SPOKEN_START.exec(rest);
+  if (m) { hit = whenToDate(m.slice(1), now); if (hit) rest = rest.slice(m[0].length); }
+  if (!hit) { m = SPOKEN_END.exec(rest); if (m) { hit = whenToDate(m.slice(1), now); if (hit) rest = rest.slice(0, m.index); } }
+  if (!hit) {
+    if (!t) return raw;
+    // heure seule (« rappeler Paul à 14h ») : aujourd'hui, ou demain si l'heure est passée
+    const when = new Date(startOfDay(now)); when.setHours(t.h, t.m);
+    return `${rest} @${ymd(when < now ? addDays(startOfDay(now), 1) : startOfDay(now))} ${hhmm(t)}`.replace(/^./, (c) => c.toUpperCase());
+  }
+  const time = t ? hhmm(t) : hit.time;
+  rest = rest.replace(/\b(?:à|a)\s*$/i, '').replace(/^[\s,:;-]+|[\s,;:-]+$/g, '').replace(/\s{2,}/g, ' ');
+  if (!rest) return raw;
+  rest = rest.charAt(0).toUpperCase() + rest.slice(1);
+  return `${rest} @${ymd(hit.date)}${time ? ' ' + time : ''}`;
+}
+
 // ——— Récurrence : « chaque lundi », « tous les 2 jours », « chaque mois le 15 »… ———
 
 const DAYS_SRC = 'lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche';
